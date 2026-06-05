@@ -103,6 +103,34 @@ class ServingEngineTests(unittest.TestCase):
         self.assertEqual([event["text"] for event in events], ["A", "BCDE"])
         self.assertEqual(tokenizer.decode_calls, [[65], [66, 67, 68, 69]])
 
+    def test_streaming_finished_event_omits_unused_payload(self):
+        events = []
+        engine = ServingLLMEngine.__new__(ServingLLMEngine)
+        engine.event_sink = events.append
+        engine.choices = {}
+        engine.active_requests = {}
+        seq = Mock()
+        seq.seq_id = 1
+        seq.num_completion_tokens = 2
+        choice = ChoiceState(
+            seq=seq,
+            request_id="req",
+            choice_index=0,
+            prompt_text="prompt",
+            prompt_tokens=1,
+            stop=[],
+            echo=False,
+            stream=True,
+            decoder=Mock(),
+        )
+
+        engine._finish_choice(choice, "length")
+
+        self.assertEqual(events[0]["type"], "finished")
+        self.assertNotIn("text", events[0])
+        self.assertNotIn("token_ids", events[0])
+        self.assertEqual(events[0]["completion_tokens"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

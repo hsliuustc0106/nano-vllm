@@ -99,11 +99,12 @@ enum EngineEvent {
     Finished {
         request_id: String,
         choice_index: usize,
+        #[serde(default)]
         text: String,
-        #[serde(rename = "token_ids")]
+        #[serde(rename = "token_ids", default)]
         _token_ids: Vec<i64>,
         finish_reason: String,
-        #[serde(rename = "prompt_tokens")]
+        #[serde(rename = "prompt_tokens", default)]
         _prompt_tokens: u64,
         completion_tokens: u64,
     },
@@ -921,6 +922,34 @@ mod tests {
         assert_eq!(chunk["choices"].as_array().unwrap().len(), 0);
         assert_eq!(chunk["usage"]["completion_tokens"], 3);
         assert_eq!(chunk["usage"]["total_tokens"], 5);
+    }
+
+    #[test]
+    fn decodes_slim_streaming_finished_event() {
+        let bytes = rmp_serde::to_vec_named(&json!({
+            "type": "finished",
+            "request_id": "abc",
+            "choice_index": 0,
+            "finish_reason": "length",
+            "completion_tokens": 3
+        }))
+        .unwrap();
+        let event: EngineEvent = rmp_serde::from_slice(&bytes).unwrap();
+        match event {
+            EngineEvent::Finished {
+                text,
+                _token_ids,
+                _prompt_tokens,
+                completion_tokens,
+                ..
+            } => {
+                assert_eq!(text, "");
+                assert!(_token_ids.is_empty());
+                assert_eq!(_prompt_tokens, 0);
+                assert_eq!(completion_tokens, 3);
+            }
+            _ => panic!("expected finished event"),
+        }
     }
 
     #[tokio::test]

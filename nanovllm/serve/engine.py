@@ -206,6 +206,9 @@ class ServingLLMEngine(LLMEngine):
         choice.finished = True
         if choice.stream:
             self._flush_pending_token(choice)
+            self._emit_finished(choice, finish_reason)
+            self._cleanup_finished_choice(choice)
+            return
         seq = choice.seq
         completion_text = choice.decoder.flush(finished=True)
         if len(completion_text) < len(choice.completion_text):
@@ -214,16 +217,33 @@ class ServingLLMEngine(LLMEngine):
         if stop_index is not None:
             completion_text = completion_text[:stop_index]
         text = choice.prompt_text + completion_text if choice.echo else completion_text
-        self._emit({
+        self._emit_finished(choice, finish_reason, text=text, token_ids=seq.completion_token_ids)
+        self._cleanup_finished_choice(choice)
+
+    def _emit_finished(
+        self,
+        choice: ChoiceState,
+        finish_reason: str,
+        text: str | None = None,
+        token_ids: list[int] | None = None,
+    ):
+        seq = choice.seq
+        event = {
             "type": "finished",
             "request_id": choice.request_id,
             "choice_index": choice.choice_index,
-            "text": text,
-            "token_ids": seq.completion_token_ids,
             "finish_reason": finish_reason,
             "prompt_tokens": choice.prompt_tokens,
             "completion_tokens": seq.num_completion_tokens,
-        })
+        }
+        if text is not None:
+            event["text"] = text
+        if token_ids is not None:
+            event["token_ids"] = token_ids
+        self._emit(event)
+
+    def _cleanup_finished_choice(self, choice: ChoiceState):
+        seq = choice.seq
         self.choices.pop(seq.seq_id, None)
         active = self.active_requests.get(choice.request_id)
         if active is not None:
