@@ -43,6 +43,86 @@ outputs = llm.generate(prompts, sampling_params)
 outputs[0]["text"]
 ```
 
+## Online Serving
+
+Nano-vLLM also includes an experimental serving stack. The user-facing command
+starts both the Python engine process, which owns model execution and
+scheduling, and the Rust HTTP frontend, which serves an OpenAI-compatible API.
+
+Start the service:
+
+```bash
+nanovllm serve \
+  --model ~/huggingface/Qwen3-0.6B/ \
+  --served-model-name Qwen3-0.6B \
+  --host 127.0.0.1 \
+  --port 8000
+```
+
+Internally, this launches a Python engine process and the Rust HTTP frontend
+with local IPC endpoints. Most users should only need the single `nanovllm
+serve` command.
+
+Request a completion:
+
+```bash
+curl http://127.0.0.1:8000/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen3-0.6B","prompt":"Hello, Nano-vLLM.","max_tokens":32}'
+```
+
+The first serving endpoint supports `/v1/completions` and `/v1/models`.
+Completions support `model`, `prompt`, `max_tokens`, `temperature`, `stream`,
+`n`, `stop`, and `echo`. Streaming uses server-sent events and ends with
+`data: [DONE]`.
+
+To compare online serving with offline batch generation, run:
+
+```bash
+python tools/compare_serving_bench.py \
+  --mode offline \
+  --model ~/huggingface/Qwen3-0.6B/ \
+  --num-prompts 64 \
+  --max-tokens 32
+
+python tools/compare_serving_bench.py \
+  --mode online \
+  --model ~/huggingface/Qwen3-0.6B/ \
+  --served-model Qwen3-0.6B \
+  --base-url http://127.0.0.1:8000 \
+  --num-prompts 64 \
+  --concurrency 64 \
+  --max-tokens 32
+```
+
+The online mode uses the formal `vllm bench serve` harness with
+`--backend openai`, `--endpoint /v1/completions`, and the random dataset. It
+requires the `vllm` CLI to be available on `PATH`.
+
+To capture a clean Nsight Systems profile of only the measured online serving
+window, excluding model load and prewarm, run:
+
+```bash
+python tools/nsys_online_profile.py \
+  --model ~/huggingface/Qwen3-0.6B/ \
+  --served-model Qwen3-0.6B \
+  --output /tmp/nanovllm-online \
+  --port 8780 \
+  --endpoint-base 6357 \
+  --prewarm \
+  --num-prompts 64 \
+  --concurrency 64 \
+  --max-tokens 32
+
+python tools/analyze_nsys.py /tmp/nanovllm-online.nsys-rep
+```
+
+On one NVIDIA L20X with Qwen3-0.6B, 64 concurrent prompts, and 32 generated
+tokens per prompt, local smoke runs showed the online path preserving most of
+the offline engine throughput once enough concurrent requests were in flight.
+Expect some variance on short runs; use the comparison script on the target
+machine for a stable baseline.
+
 ## Benchmark
 
 See `bench.py` for benchmark.

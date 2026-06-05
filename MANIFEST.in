@@ -1,0 +1,3 @@
+include rust/nanovllm-serve/Cargo.toml
+include rust/nanovllm-serve/Cargo.lock
+recursive-include rust/nanovllm-serve/src *.rs
