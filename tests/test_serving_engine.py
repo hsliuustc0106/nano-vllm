@@ -2,6 +2,19 @@ import unittest
 from unittest.mock import Mock, patch
 
 from nanovllm.serve.engine import ChoiceState, ServingLLMEngine, ZmqEngineServer
+from nanovllm.serve.text import StreamingTextDecoder
+
+
+class FakeTokenizer:
+
+    eos_token_id = -1
+
+    def __init__(self):
+        self.decode_calls = []
+
+    def decode(self, token_ids):
+        self.decode_calls.append(list(token_ids))
+        return "".join(chr(token_id) for token_id in token_ids)
 
 
 class ServingEngineTests(unittest.TestCase):
@@ -62,6 +75,33 @@ class ServingEngineTests(unittest.TestCase):
         engine._queue_or_emit_token(choice, "b", 2, finished=False)
 
         self.assertEqual([event["text"] for event in events], ["a", "b"])
+
+    def test_no_stop_streaming_path_buffers_decode_work(self):
+        tokenizer = FakeTokenizer()
+        events = []
+        engine = ServingLLMEngine.__new__(ServingLLMEngine)
+        engine.event_sink = events.append
+        engine.tokenizer = tokenizer
+        seq = Mock()
+        seq.finish_reason = None
+        seq.is_finished = False
+        choice = ChoiceState(
+            seq=seq,
+            request_id="req",
+            choice_index=0,
+            prompt_text="",
+            prompt_tokens=1,
+            stop=[],
+            echo=False,
+            stream=True,
+            decoder=StreamingTextDecoder(tokenizer),
+        )
+
+        for token_id in [65, 66, 67, 68, 69]:
+            engine._handle_token(choice, token_id)
+
+        self.assertEqual([event["text"] for event in events], ["A", "BCDE"])
+        self.assertEqual(tokenizer.decode_calls, [[65], [66, 67, 68, 69]])
 
 
 if __name__ == "__main__":

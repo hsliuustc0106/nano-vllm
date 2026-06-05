@@ -10,6 +10,9 @@ class StreamingTextDecoder:
         self.pending_token_ids.append(token_id)
         return self.flush(finished=finished)
 
+    def buffer(self, token_id: int):
+        self.pending_token_ids.append(token_id)
+
     def flush(self, finished: bool = False) -> str:
         if not self.pending_token_ids:
             return self.text

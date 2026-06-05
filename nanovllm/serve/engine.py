@@ -126,6 +126,10 @@ class ServingLLMEngine(LLMEngine):
 
     def _handle_token(self, choice: ChoiceState, token_id: int):
         seq = choice.seq
+        finish_reason = seq.finish_reason if seq.is_finished else None
+        if not choice.stop:
+            self._handle_token_without_stop(choice, token_id, finish_reason)
+            return
         completion_text = self._decode_completion(choice, token_id)
         completion_text, stopped = trim_stop(completion_text, choice.stop)
         if stopped:
@@ -141,6 +145,17 @@ class ServingLLMEngine(LLMEngine):
             self._queue_or_emit_token(choice, delta, token_id, finished)
         elif choice.stream and finished:
             self._flush_pending_token(choice)
+        if finished:
+            self._finish_choice(choice, finish_reason)
+
+    def _handle_token_without_stop(self, choice: ChoiceState, token_id: int, finish_reason: str | None):
+        seq = choice.seq
+        finished = finish_reason is not None
+        if not (seq.finish_reason == "stop" and token_id == self.tokenizer.eos_token_id):
+            choice.decoder.buffer(token_id)
+            choice.pending_tokens += 1
+        if choice.stream and (not choice.emitted_any or finished or choice.pending_tokens >= STREAM_TOKEN_FLUSH_INTERVAL):
+            self._flush_decoded_delta(choice, finished)
         if finished:
             self._finish_choice(choice, finish_reason)
 
@@ -171,6 +186,19 @@ class ServingLLMEngine(LLMEngine):
         choice.pending_text = ""
         choice.pending_tokens = 0
         choice.emitted_any = True
+
+    def _flush_decoded_delta(self, choice: ChoiceState, finished: bool):
+        completion_text = choice.decoder.flush(finished=finished)
+        choice.completion_text = completion_text
+        if len(completion_text) < len(choice.emitted_text):
+            choice.emitted_text = completion_text
+            return
+        delta = completion_text[len(choice.emitted_text):]
+        choice.emitted_text = completion_text
+        choice.pending_tokens = 0
+        if delta:
+            self._emit_token(choice.request_id, choice.choice_index, delta, None)
+            choice.emitted_any = True
 
     def _finish_choice(self, choice: ChoiceState, finish_reason: str):
         if choice.finished:
