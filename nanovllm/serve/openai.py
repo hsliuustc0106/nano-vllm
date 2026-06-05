@@ -41,8 +41,8 @@ _ALLOWED_FIELDS = {
 }
 
 
-def _is_int_list(value: list[Any]) -> bool:
-    return all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+def _is_token_id_list(value: list[Any]) -> bool:
+    return all(isinstance(item, int) and not isinstance(item, bool) and item >= 0 for item in value)
 
 
 def _is_str_list(value: list[Any]) -> bool:
@@ -50,7 +50,7 @@ def _is_str_list(value: list[Any]) -> bool:
 
 
 def _is_token_prompt_list(value: list[Any]) -> bool:
-    return all(isinstance(item, list) and _is_int_list(item) for item in value)
+    return all(isinstance(item, list) and _is_token_id_list(item) for item in value)
 
 
 def _is_default_like(name: str, value: Any) -> bool:
@@ -111,7 +111,7 @@ def _normalize_prompt(prompt: Any, tokenizer) -> list[NormalizedPrompt]:
         prompts = [(tokenizer.encode(prompt), prompt)]
     elif isinstance(prompt, list) and _is_str_list(prompt):
         prompts = [(tokenizer.encode(item), item) for item in prompt]
-    elif isinstance(prompt, list) and _is_int_list(prompt):
+    elif isinstance(prompt, list) and _is_token_id_list(prompt):
         prompts = [(prompt, tokenizer.decode(prompt))]
     elif isinstance(prompt, list) and _is_token_prompt_list(prompt):
         prompts = [(item, tokenizer.decode(item)) for item in prompt]

@@ -69,6 +69,10 @@ class CompletionRequestTests(unittest.TestCase):
     def test_rejects_invalid_prompt_and_booleans(self):
         with self.assertRaisesRegex(CompletionRequestError, "prompt"):
             self.normalize(prompt=[])
+        with self.assertRaisesRegex(CompletionRequestError, "prompt"):
+            self.normalize(prompt=[-1])
+        with self.assertRaisesRegex(CompletionRequestError, "prompt"):
+            self.normalize(prompt=[[1], [-1]])
         with self.assertRaisesRegex(CompletionRequestError, "stream"):
             self.normalize(stream="true")
         with self.assertRaisesRegex(CompletionRequestError, "echo"):

@@ -710,10 +710,10 @@ fn validate_prompt_shape(value: &Value) -> Result<(), String> {
     match value {
         Value::String(_) => Ok(()),
         Value::Array(items) if items.iter().all(Value::is_string) => Ok(()),
-        Value::Array(items) if items.iter().all(|item| item.as_i64().is_some()) => Ok(()),
+        Value::Array(items) if items.iter().all(is_token_id_value) => Ok(()),
         Value::Array(items)
             if items.iter().all(|item| match item {
-                Value::Array(tokens) => tokens.iter().all(|token| token.as_i64().is_some()),
+                Value::Array(tokens) => tokens.iter().all(is_token_id_value),
                 _ => false,
             }) =>
         {
@@ -724,6 +724,10 @@ fn validate_prompt_shape(value: &Value) -> Result<(), String> {
                 .to_string(),
         ),
     }
+}
+
+fn is_token_id_value(value: &Value) -> bool {
+    value.as_u64().is_some()
 }
 
 fn parse_positive_u64(value: Option<&Value>, default: u64, name: &str) -> Result<u64, String> {
@@ -882,6 +886,28 @@ mod tests {
         assert!(validate_completion_payload(payload)
             .unwrap_err()
             .contains("top_p"));
+    }
+
+    #[test]
+    fn rejects_negative_token_id_prompts() {
+        for prompt in [json!([-1]), json!([[1], [-1]])] {
+            let payload = CompletionPayload {
+                model: Some("model".to_string()),
+                prompt: Some(prompt),
+                max_tokens: None,
+                temperature: None,
+                stream: None,
+                stream_options: None,
+                n: None,
+                stop: None,
+                echo: None,
+                ignore_eos: None,
+                extra: BTreeMap::new(),
+            };
+            assert!(validate_completion_payload(payload)
+                .unwrap_err()
+                .contains("prompt"));
+        }
     }
 
     #[test]
