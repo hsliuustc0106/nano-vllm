@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=61", "setuptools-rust>=1.12.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -17,7 +17,13 @@ dependencies = [
     "transformers>=4.51.0",
     "flash-attn",
     "xxhash",
+    "pyzmq",
+    "msgpack",
 ]
+
+[project.scripts]
+nanovllm = "nanovllm.serve.cli:main"
+nanovllm-engine = "nanovllm.serve.engine:main"
 
 [project.urls]
 Homepage="https://github.com/GeeeekExplorer/nano-vllm"
@@ -25,3 +31,10 @@ Homepage="https://github.com/GeeeekExplorer/nano-vllm"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["nanovllm*"]
+
+[tool.uv.extra-build-dependencies]
+flash-attn = ["torch"]
+
+[[tool.setuptools-rust.bins]]
+target = "nanovllm-serve"
+path = "rust/nanovllm-serve/Cargo.toml"
