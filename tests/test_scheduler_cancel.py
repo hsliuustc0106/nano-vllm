@@ -74,6 +74,41 @@ class SchedulerCancelTests(unittest.TestCase):
         self.assertEqual(seq.status, SequenceStatus.FINISHED)
         self.assertEqual(seq.block_table, [])
 
+    def test_schedule_prioritizes_decode_over_waiting_prefill(self):
+        scheduler = Scheduler(scheduler_config())
+        running = Sequence([1, 2, 3])
+        scheduler.block_manager.allocate(running, 0)
+        running.status = SequenceStatus.RUNNING
+        running.is_prefill = False
+        scheduler.running.append(running)
+        scheduler.last_schedule_was_prefill = True
+        waiting = Sequence([4, 5, 6])
+        scheduler.add(waiting)
+
+        scheduled, is_prefill = scheduler.schedule()
+
+        self.assertFalse(is_prefill)
+        self.assertEqual(scheduled, [running])
+        self.assertEqual(running.num_scheduled_tokens, 1)
+        self.assertEqual(list(scheduler.waiting), [waiting])
+
+    def test_schedule_alternates_decode_and_waiting_prefill(self):
+        scheduler = Scheduler(scheduler_config())
+        running = Sequence([1, 2, 3])
+        scheduler.block_manager.allocate(running, 0)
+        running.status = SequenceStatus.RUNNING
+        running.is_prefill = False
+        scheduler.running.append(running)
+        waiting = Sequence([4, 5, 6])
+        scheduler.add(waiting)
+
+        scheduled, is_prefill = scheduler.schedule()
+
+        self.assertTrue(is_prefill)
+        self.assertEqual(scheduled, [waiting])
+        self.assertFalse(scheduler.waiting)
+        self.assertEqual(list(scheduler.running), [running, waiting])
+
 
 if __name__ == "__main__":
     unittest.main()
