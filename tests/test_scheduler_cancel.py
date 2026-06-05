@@ -109,6 +109,22 @@ class SchedulerCancelTests(unittest.TestCase):
         self.assertFalse(scheduler.waiting)
         self.assertEqual(list(scheduler.running), [running, waiting])
 
+    def test_decode_schedule_rotates_running_sequences(self):
+        scheduler = Scheduler(scheduler_config())
+        scheduler.max_num_seqs = 2
+        seqs = [Sequence([i, i + 1]) for i in range(3)]
+        for seq in seqs:
+            scheduler.block_manager.allocate(seq, 0)
+            seq.status = SequenceStatus.RUNNING
+            seq.is_prefill = False
+            scheduler.running.append(seq)
+
+        scheduled, is_prefill = scheduler.schedule()
+
+        self.assertFalse(is_prefill)
+        self.assertEqual(scheduled, seqs[:2])
+        self.assertEqual(list(scheduler.running), [seqs[2], seqs[0], seqs[1]])
+
 
 if __name__ == "__main__":
     unittest.main()

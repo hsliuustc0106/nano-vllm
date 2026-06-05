@@ -101,7 +101,7 @@ class Scheduler:
                 self.block_manager.may_append(seq)
                 scheduled_seqs.append(seq)
         assert scheduled_seqs
-        self.running.extendleft(reversed(scheduled_seqs))
+        self.running.extend(scheduled_seqs)
         self.last_schedule_was_prefill = False
         return scheduled_seqs, False
 
