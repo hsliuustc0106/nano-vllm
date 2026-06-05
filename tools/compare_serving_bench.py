@@ -11,6 +11,53 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 
+BENCHMARK_PRESETS = {
+    "short-throughput": {
+        "num_prompts": 128,
+        "min_input_len": 128,
+        "max_input_len": 128,
+        "max_tokens": 64,
+        "concurrency": 64,
+        "max_model_len": 1024,
+        "max_num_seqs": 64,
+        "max_num_batched_tokens": 4096,
+    },
+    "long-throughput-8k-1k": {
+        "num_prompts": 16,
+        "min_input_len": 8192,
+        "max_input_len": 8192,
+        "max_tokens": 1024,
+        "concurrency": 16,
+        "max_model_len": 32768,
+        "max_num_seqs": 16,
+        "max_num_batched_tokens": 32768,
+    },
+    "low-latency-32k-2k": {
+        "num_prompts": 4,
+        "min_input_len": 32768,
+        "max_input_len": 32768,
+        "max_tokens": 2048,
+        "concurrency": 1,
+        "max_model_len": 40960,
+        "max_num_seqs": 1,
+        "max_num_batched_tokens": 32768,
+    },
+}
+
+
+def apply_preset(args):
+    if args.preset is None:
+        return
+    preset = BENCHMARK_PRESETS[args.preset]
+    for name, value in preset.items():
+        if name not in args.overrides:
+            setattr(args, name, value)
+
+
+def option_was_provided(option: str, argv: list[str]) -> bool:
+    return option in argv or any(arg.startswith(f"{option}=") for arg in argv)
+
+
 def make_prompts(args):
     rng = Random(args.seed)
     return [
@@ -117,6 +164,11 @@ def run_online(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Compare Nano-vLLM offline batch and online HTTP serving speed.")
+    parser.add_argument(
+        "--preset",
+        choices=sorted(BENCHMARK_PRESETS),
+        help="Apply a named benchmark shape. Explicit command-line values override preset defaults.",
+    )
     parser.add_argument("--mode", choices=["offline", "online"], required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--served-model", default="Qwen3-0.6B")
@@ -139,6 +191,14 @@ def main():
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--enforce-eager", action="store_true")
     args = parser.parse_args()
+    args.overrides = {
+        action.dest
+        for action in parser._actions
+        if action.option_strings
+        for option in action.option_strings
+        if option_was_provided(option, sys.argv[1:])
+    }
+    apply_preset(args)
 
     if args.mode == "offline":
         prompts = make_prompts(args)

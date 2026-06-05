@@ -99,6 +99,46 @@ The online mode uses the formal `vllm bench serve` harness with
 `--backend openai`, `--endpoint /v1/completions`, and the random dataset. It
 requires the `vllm` CLI to be available on `PATH`.
 
+Two long-context serving presets are included for repeatable comparisons:
+
+```bash
+# Throughput-oriented long-context run:
+# input 8K, output 1K, 16 prompts, concurrency 16.
+nanovllm serve \
+  --model ~/huggingface/Qwen3-0.6B/ \
+  --served-model-name Qwen3-0.6B \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --max-model-len 32768 \
+  --max-num-seqs 16 \
+  --max-num-batched-tokens 32768
+
+python tools/compare_serving_bench.py \
+  --preset long-throughput-8k-1k \
+  --mode online \
+  --model ~/huggingface/Qwen3-0.6B/ \
+  --served-model Qwen3-0.6B \
+  --base-url http://127.0.0.1:8000
+
+# Low-latency long-context run:
+# input 32K, output 2K, 4 prompts, concurrency 1.
+nanovllm serve \
+  --model ~/huggingface/Qwen3-0.6B/ \
+  --served-model-name Qwen3-0.6B \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --max-model-len 40960 \
+  --max-num-seqs 1 \
+  --max-num-batched-tokens 32768
+
+python tools/compare_serving_bench.py \
+  --preset low-latency-32k-2k \
+  --mode online \
+  --model ~/huggingface/Qwen3-0.6B/ \
+  --served-model Qwen3-0.6B \
+  --base-url http://127.0.0.1:8000
+```
+
 To capture a clean Nsight Systems profile of only the measured online serving
 window, excluding model load and prewarm, run:
 
