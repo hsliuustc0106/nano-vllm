@@ -97,6 +97,36 @@ class ServingCliTests(unittest.TestCase):
         with patch("nanovllm.serve.cli.subprocess.Popen", side_effect=[engine, frontend]):
             self.assertEqual(_serve(args), 7)
 
+    def test_serve_cleans_up_engine_when_frontend_launch_fails(self):
+        engine = Mock()
+        engine.poll.return_value = None
+        engine.wait.return_value = 0
+        args = SimpleNamespace(
+            model="/models/qwen",
+            served_model_name="qwen",
+            host="127.0.0.1",
+            port=8000,
+            request_endpoint="tcp://127.0.0.1:5557",
+            event_endpoint="tcp://127.0.0.1:5558",
+            tensor_parallel_size=1,
+            max_model_len=4096,
+            max_num_seqs=512,
+            max_num_batched_tokens=16384,
+            gpu_memory_utilization=0.9,
+            enforce_eager=False,
+            frontend_binary="/tmp/nanovllm-serve",
+        )
+
+        with patch(
+            "nanovllm.serve.cli.subprocess.Popen",
+            side_effect=[engine, OSError("frontend launch failed")],
+        ):
+            with self.assertRaisesRegex(OSError, "frontend launch failed"):
+                _serve(args)
+
+        engine.terminate.assert_called_once_with()
+        engine.wait.assert_called_once_with(timeout=10)
+
 
 if __name__ == "__main__":
     unittest.main()

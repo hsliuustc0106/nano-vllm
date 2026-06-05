@@ -88,9 +88,8 @@ def _serve(args: argparse.Namespace) -> int:
         args.event_endpoint,
     ]
 
-    engine = subprocess.Popen(engine_cmd)
-    frontend = subprocess.Popen(frontend_cmd)
-
+    engine = None
+    frontend = None
     shutting_down = False
     intentional_shutdown = False
 
@@ -102,12 +101,14 @@ def _serve(args: argparse.Namespace) -> int:
             return
         shutting_down = True
         for process in (frontend, engine):
-            if process.poll() is None:
+            if process is not None and process.poll() is None:
                 process.terminate()
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
     try:
+        engine = subprocess.Popen(engine_cmd)
+        frontend = subprocess.Popen(frontend_cmd)
         while True:
             engine_code = engine.poll()
             frontend_code = frontend.poll()
@@ -127,11 +128,12 @@ def _serve(args: argparse.Namespace) -> int:
     finally:
         shutdown()
         for process in (frontend, engine):
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+            if process is not None:
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
 
 
 def main(argv: list[str] | None = None) -> int:
