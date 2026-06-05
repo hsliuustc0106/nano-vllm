@@ -14,13 +14,13 @@ Skills are organized by **abstraction layer** with explicit extensibility axes.
 
 | Tier | Axis | Purpose |
 |:-----|:-----|:--------|
-| [`models/`](models/) | model architecture | What does each model look like? Weight layout, attention type, tokenization, modalities. |
-| [`algorithms/`](algorithms/) | idea / algorithm | Cross-cutting serving concepts: continuous batching, paged attention, speculative decoding, MoE routing, parallelism, quantization schemes. |
-| [`frameworks/`](frameworks/) | programming framework | PyTorch / MLX / (future JAX) idioms for serving. |
-| [`backends/`](backends/) | software backend library | How to **use** existing kernel libraries — FlashInfer, FlashAttention, Triton kernels, CUDA graph. Kernel *implementation* is out of scope; see agent-gpu-skills. |
-| [`hardware/`](hardware/) | hardware platform | Hopper / Blackwell / MI300 / Apple Silicon specifics — precision, collectives, tuning. |
-| [`engines/`](engines/) | reference system | Source-code lookup into vLLM, SGLang, TensorRT-LLM. Short SKILL.md + "where's X" grep tables. |
-| [`tooling/`](tooling/) | orthogonal workflow | FastAPI serving, accuracy checking, serving benchmarks, profiling, I/O handling. |
+| [`models/`](references/models/) | model architecture | What does each model look like? Weight layout, attention type, tokenization, modalities. |
+| [`algorithms/`](references/algorithms/) | idea / algorithm | Cross-cutting serving concepts: continuous batching, paged attention, speculative decoding, MoE routing, parallelism, quantization schemes. |
+| [`frameworks/`](references/frameworks/) | programming framework | PyTorch / MLX / (future JAX) idioms for serving. |
+| [`backends/`](references/backends/) | software backend library | How to **use** existing kernel libraries — FlashInfer, FlashAttention, Triton kernels, CUDA graph. Kernel *implementation* is out of scope; see agent-gpu-skills. |
+| [`hardware/`](references/hardware/) | hardware platform | Hopper / Blackwell / MI300 / Apple Silicon specifics — precision, collectives, tuning. |
+| [`engines/`](references/engines/) | reference system | Source-code lookup into vLLM, SGLang, TensorRT-LLM. Short SKILL.md + "where's X" grep tables. |
+| [`tooling/`](references/tooling/) | orthogonal workflow | FastAPI serving, accuracy checking, serving benchmarks, profiling, I/O handling. |
 
 ## Extensibility
 
@@ -39,21 +39,25 @@ This collection assumes existing kernel libraries. Writing new CUDA / Triton / C
 
 ## Setup
 
-The runtime CLIs auto-load this skill from `skills/serving-systems/`
+The runtime CLIs auto-load this skill from `resources/skills/serving-systems/`
 via the `--skills-dir` flag (default in `cli_common.py`),
 copying the skill tree into each workspace's `.claude/skills/` so the
 in-workspace coding agent picks it up.
 
-The reference engines (`repos/{vllm,sglang,TensorRT-LLM}/`) are tracked as
-git submodules — initialize with:
+The engine reference checkout is not bundled in this repository. If you want
+engine source anchors in the `references/engines/*.md` notes, set
+`SERVE_REPOS` to an environment path that contains the relevant upstream
+repositories (for example a local copy of `vllm`, `sglang`, or `TensorRT-LLM`).
+
+Use this pattern when you have external repos available:
 
 ```bash
-git submodule update --init skills/serving-systems/repos
+export SERVE_REPOS=<path-to-your-local-repo-bundles>/serving-systems-repos
 ```
 
-`update-repos.sh` is the upstream sparse-checkout helper, kept for parity
-with the source `serving-systems-skills` repository; the submodule flow above is the
-one used here.
+`update-repos.sh` is the upstream sparse-checkout helper retained for parity.
+This repository uses local references only by default; engine paths in docs are
+advisory until you provide `SERVE_REPOS`.
 
 ## Directory structure
 
@@ -62,26 +66,26 @@ serving-systems-skills/
 ├── README.md, CLAUDE.md          # overview + guidance for skill authors
 ├── update-repos.sh               # upstream sparse-checkout helper (parity)
 │
-├── models/                       text-dense, text-moe, ssm-hybrid,
+├── references/models/            text-dense, text-moe, ssm-hybrid,
 │                                 vision-language, speech-language,
 │                                 image-generation, video-generation,
 │                                 speech-generation, omni-multimodal
-├── algorithms/                   attention-variants, async-scheduling,
+├── references/algorithms/        attention-variants, async-scheduling,
 │                                 continuous-batching, paged-attention,
 │                                 radix-prefix-caching, heterogeneous-kv-cache,
 │                                 chunked-prefill, speculative-decoding,
 │                                 disaggregated-serving, moe-routing-dispatch,
 │                                 quantization-schemes, parallelism,
 │                                 structured-output, batched-sampling
-├── frameworks/                   pytorch, triton, mlx
-├── backends/                     flashinfer, flashattention, sdpa,
+├── references/frameworks/        pytorch, triton, mlx
+├── references/backends/          flashinfer, flashattention, sdpa,
 │                                 triton-kernels, cuda-graph
-├── hardware/                     nvidia, amd-mi300, apple-silicon
-├── engines/                      vllm, sglang, trtllm
-├── tooling/                      fastapi-serving, openai-api,
+├── references/hardware/          nvidia, amd-mi300, apple-silicon
+├── references/engines/           vllm, sglang, trtllm
+├── references/tooling/           fastapi-serving, openai-api,
 │                                 accuracy-checker, serving-benchmark,
 │                                 profiler, io-handling, lora-serving
-└── repos/                        vllm, sglang, TensorRT-LLM (git submodules)
+└── repos/                        optional local mirrors for source lookups
 ```
 
 ## Authoring

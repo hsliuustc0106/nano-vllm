@@ -149,4 +149,8 @@ Kernel implementation (writing CUDA / Triton / CUTLASS). For that, use the separ
 
 ## Reference repos
 
-The `repos/` directory (excluded from materialization to agents) holds full source trees of vLLM, SGLang, and TensorRT-LLM as git submodules. Engine-source-map references in this skill cite paths like `$SERVE_REPOS/<engine>/...`; export `SERVE_REPOS=$(git rev-parse --show-toplevel)/skills/serving-systems/repos` or substitute inline.
+The `repos/` directory (excluded from materialization to agents) is optional for
+local source mirrors of vLLM, SGLang, and TensorRT-LLM. Engine-source-map
+references in this skill cite paths like `$SERVE_REPOS/<engine>/...`; export
+`SERVE_REPOS=$(git rev-parse --show-toplevel)/resources/skills/serving-systems/repos`
+or substitute inline.

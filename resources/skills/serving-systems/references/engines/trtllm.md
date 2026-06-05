@@ -5,10 +5,12 @@ Short reference into `repos/TensorRT-LLM/`. Two runtimes — know which you're t
 ## Setup
 
 ```bash
-export SERVE_REPOS=<serving-systems-root>/skills/serving-systems/repos
+export SERVE_REPOS=<serving-systems-root>/resources/skills/serving-systems/repos
 ```
 
-If `$SERVE_REPOS/TensorRT-LLM/` is missing (e.g. running inside a fresh agent sandbox where the submodule isn't mounted), fetch only the pinned commit this skill was authored against — the paths and line numbers in the tables below assume it:
+If `$SERVE_REPOS/TensorRT-LLM/` is missing, fetch only the pinned commit this
+skill was authored against — the paths and line numbers in the tables below
+assume it:
 
 ```bash
 mkdir -p "$SERVE_REPOS/TensorRT-LLM" && cd "$SERVE_REPOS/TensorRT-LLM"
@@ -17,8 +19,6 @@ git remote add origin https://github.com/NVIDIA/TensorRT-LLM.git
 git fetch --depth 1 origin 0d2bea7c3c99b734a8e09c4c767820e03136a15b
 git checkout -q FETCH_HEAD
 ```
-
-(From this repo root the equivalent is `git submodule update --init skills/serving-systems/repos/TensorRT-LLM`.)
 
 ## Runtimes
 

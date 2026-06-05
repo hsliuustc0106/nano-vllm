@@ -1,15 +1,16 @@
 # SGLang source-code lookup
 
-Short reference into `repos/sglang/`. Depends on the `skills/serving-systems/repos/sglang` submodule being initialized.
+Short reference into `repos/sglang/` under your configured `$SERVE_REPOS` location.
 
 ## Setup
 
 ```bash
-export SERVE_REPOS=<serving-systems-root>/skills/serving-systems/repos
+export SERVE_REPOS=<serving-systems-root>/resources/skills/serving-systems/repos
 # or substitute $SERVE_REPOS inline below.
 ```
 
-If `$SERVE_REPOS/sglang/` is missing (e.g. running inside a fresh agent sandbox where the submodule isn't mounted), fetch only the pinned commit this skill was authored against — the paths and line numbers in the tables below assume it:
+If `$SERVE_REPOS/sglang/` is missing, fetch only the pinned commit this skill
+was authored against — the paths and line numbers in the tables below assume it:
 
 ```bash
 mkdir -p "$SERVE_REPOS/sglang" && cd "$SERVE_REPOS/sglang"
@@ -18,8 +19,6 @@ git remote add origin https://github.com/sgl-project/sglang.git
 git fetch --depth 1 origin 04b1caf75b3c6f043a979ddce21d43ed07c217a6
 git checkout -q FETCH_HEAD
 ```
-
-(From this repo root the equivalent is `git submodule update --init skills/serving-systems/repos/sglang`.)
 
 ## Directory map
 

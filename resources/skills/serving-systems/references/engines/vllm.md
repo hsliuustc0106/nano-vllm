@@ -5,11 +5,12 @@ Short reference pointing into `repos/vllm/` for common vLLM development tasks. T
 ## Setup
 
 ```bash
-export SERVE_REPOS=<serving-systems-root>/skills/serving-systems/repos
+export SERVE_REPOS=<serving-systems-root>/resources/skills/serving-systems/repos
 # or substitute $SERVE_REPOS inline in commands below.
 ```
 
-If `$SERVE_REPOS/vllm/` is missing (e.g. running inside a fresh agent sandbox where the submodule isn't mounted), fetch only the pinned commit this skill was authored against — the paths and line numbers in the tables below assume it:
+If `$SERVE_REPOS/vllm/` is missing, fetch only the pinned commit this skill was
+authored against — the paths and line numbers in the tables below assume it:
 
 ```bash
 mkdir -p "$SERVE_REPOS/vllm" && cd "$SERVE_REPOS/vllm"
@@ -18,8 +19,6 @@ git remote add origin https://github.com/vllm-project/vllm.git
 git fetch --depth 1 origin 0210024ae796446a121f96d2d31053668ac0fd85
 git checkout -q FETCH_HEAD
 ```
-
-(From this repo root the equivalent is `git submodule update --init skills/serving-systems/repos/vllm`.)
 
 ## Directory map
 

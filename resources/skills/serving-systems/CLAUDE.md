@@ -7,7 +7,7 @@ This file is loaded automatically when Claude works inside this repo. It capture
 This collection follows the [agentskills.io](https://agentskills.io/specification) **single-skill + references** pattern, with references grouped into tier subdirectories for browsability:
 
 ```
-skills/serving-systems/
+resources/skills/serving-systems/
 ├── SKILL.md                   # the only skill — keep tiny; routes to references/
 ├── references/
 │   ├── algorithms/            # serving algorithms
@@ -19,7 +19,7 @@ skills/serving-systems/
 │   ├── hardware/              # NVIDIA / AMD / Apple specifics
 │   ├── models/                # model-architecture notes
 │   └── tooling/               # OpenAI API / profiler / benchmark / etc.
-├── repos/                     # vLLM / SGLang / TensorRT-LLM submodules
+├── repos/                     # optional local mirrors (vLLM / SGLang / TensorRT-LLM)
 │                              # (excluded from agent materialization)
 └── README.md, OVERVIEW.md, CLAUDE.md, update-repos.sh   # repo docs
 ```
@@ -123,10 +123,12 @@ This is how axis-crossing knowledge lives — not in the directory tree.
 
 ## Reference-repo path convention
 
-Repos live at `skills/serving-systems/repos/{vllm,sglang,TensorRT-LLM}/` (git submodules). Reference files cite paths via:
+Set `$SERVE_REPOS` to the location of your local engine source mirrors and
+reference files will use it for path-based lookups. If you do not mount any
+upstream source tree in this repo, treat these lookups as advisory.
 
 ```
-$SERVE_REPOS = <serving-systems-root>/skills/serving-systems/repos
+$SERVE_REPOS = <serving-systems-root>/resources/skills/serving-systems/repos
 ```
 
 Example grep recipe:
@@ -135,7 +137,7 @@ Example grep recipe:
 rg "register.*backend" $SERVE_REPOS/vllm/vllm/v1/attention/backends/
 ```
 
-Tell the reader to export `SERVE_REPOS=$(git rev-parse --show-toplevel)/skills/serving-systems/repos` or substitute inline.
+Tell the reader to export `SERVE_REPOS=$(git rev-parse --show-toplevel)/resources/skills/serving-systems/repos` or substitute inline.
 
 The `repos/` directory is **excluded** from agent materialization (see the local agent loader's `cli_runner.py::_materialize_skills`); reference paths into it are advisory grep recipes, not runtime imports.
 
@@ -161,13 +163,17 @@ The `repos/` directory is **excluded** from agent materialization (see the local
 
 ## Running the reference repos
 
+If needed, initialize your local mirror set before using the path-based lookups:
+
 ```bash
-git submodule update --init skills/serving-systems/repos       # initialize all
-git submodule update --init skills/serving-systems/repos/vllm  # initialize one
-git -C skills/serving-systems/repos/vllm pull origin main      # update one
+export SERVE_REPOS=$(git rev-parse --show-toplevel)/resources/skills/serving-systems/repos
+mkdir -p "$SERVE_REPOS"
+git -C "$SERVE_REPOS" init -q || true
 ```
 
-`update-repos.sh` is the upstream sparse-checkout helper; here the repos are tracked as shallow git submodules instead.
+`update-repos.sh` is the upstream sparse-checkout helper. Use it if you want
+to materialize upstream source trees locally; this repo does not ship those
+repos directly in `resources/skills/serving-systems`.
 
 ## Style
 

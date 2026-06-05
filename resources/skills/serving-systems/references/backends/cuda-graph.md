@@ -482,6 +482,12 @@ return model.lm_head(hidden_states)
 Copy real data into the first `actual_bs` slots of static buffers:
 
 ```python
+num_pad = padded_bs - actual_bs
+s_kv_indptr = self.static_kv_indptr[padded_bs]
+s_kv_indices = self.static_kv_indices[padded_bs]
+s_kv_last_page_len = self.static_kv_last_page_len[padded_bs]
+total_real_pages = kv_indptr[-1].item()
+
 self.static_input_ids[padded_bs][:actual_bs].copy_(input_ids)
 self.static_position_ids[padded_bs][:actual_bs].copy_(position_ids)
 self.static_batch_indices[padded_bs][:actual_bs].copy_(batch_indices)

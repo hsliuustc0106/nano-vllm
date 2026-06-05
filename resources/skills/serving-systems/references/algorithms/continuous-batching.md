@@ -323,6 +323,8 @@ max_past_len = 8
 For each layer, left-pad each request's K and V to `max_past_len`, then `torch.cat` along the batch dimension:
 
 ```python
+past_lens = [req.past_key_values[0][0].shape[2] for req in active]
+max_past_len = max(past_lens, default=0)
 batched = []
 for layer_idx in range(num_layers):
     k_list, v_list = [], []

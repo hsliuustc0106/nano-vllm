@@ -462,7 +462,7 @@ exposed to the kernel) changes.
 
 ```python
 def build_block_table(reqs, device):
-    max_blocks = max(len(r.blocks) for r in reqs)
+    max_blocks = max((len(r.blocks) for r in reqs), default=0)
     block_table = torch.zeros(
         (len(reqs), max_blocks), dtype=torch.int32, device=device,
     )
