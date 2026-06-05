@@ -16,6 +16,7 @@ from nanovllm.serve.text import StreamingTextDecoder, find_stop, next_delta, tri
 
 
 EventSink = Callable[[dict[str, Any]], None]
+STREAM_TOKEN_FLUSH_INTERVAL = 4
 
 
 @dataclass(slots=True)
@@ -36,9 +37,13 @@ class ChoiceState:
     prompt_tokens: int
     stop: list[str]
     echo: bool
+    stream: bool
     decoder: StreamingTextDecoder
     completion_text: str = ""
     emitted_text: str = ""
+    pending_text: str = ""
+    pending_tokens: int = 0
+    emitted_any: bool = False
     finished: bool = False
 
 
@@ -95,9 +100,10 @@ class ServingLLMEngine(LLMEngine):
                     prompt_tokens=len(prompt.token_ids),
                     stop=request.stop,
                     echo=request.echo,
+                    stream=request.stream,
                     decoder=StreamingTextDecoder(self.tokenizer),
                 )
-                if request.echo:
+                if request.stream and request.echo:
                     self._emit_token(request.request_id, choice_index, prompt.text, None)
                 choice_index += 1
 
@@ -131,8 +137,10 @@ class ServingLLMEngine(LLMEngine):
         finish_reason = seq.finish_reason if seq.is_finished else None
         finished = finish_reason is not None
         delta = self._next_delta(choice, completion_text, finished)
-        if delta:
-            self._emit_token(choice.request_id, choice.choice_index, delta, token_id)
+        if choice.stream and delta:
+            self._queue_or_emit_token(choice, delta, token_id, finished)
+        elif choice.stream and finished:
+            self._flush_pending_token(choice)
         if finished:
             self._finish_choice(choice, finish_reason)
 
@@ -146,10 +154,30 @@ class ServingLLMEngine(LLMEngine):
         choice.emitted_text, delta = next_delta(choice.emitted_text, completion_text, choice.stop, finished)
         return delta
 
+    def _queue_or_emit_token(self, choice: ChoiceState, delta: str, token_id: int, finished: bool):
+        if choice.stop:
+            self._emit_token(choice.request_id, choice.choice_index, delta, token_id)
+            choice.emitted_any = True
+            return
+        choice.pending_text += delta
+        choice.pending_tokens += 1
+        if not choice.emitted_any or finished or choice.pending_tokens >= STREAM_TOKEN_FLUSH_INTERVAL:
+            self._flush_pending_token(choice)
+
+    def _flush_pending_token(self, choice: ChoiceState):
+        if not choice.pending_text:
+            return
+        self._emit_token(choice.request_id, choice.choice_index, choice.pending_text, None)
+        choice.pending_text = ""
+        choice.pending_tokens = 0
+        choice.emitted_any = True
+
     def _finish_choice(self, choice: ChoiceState, finish_reason: str):
         if choice.finished:
             return
         choice.finished = True
+        if choice.stream:
+            self._flush_pending_token(choice)
         seq = choice.seq
         completion_text = choice.decoder.flush(finished=True)
         if len(completion_text) < len(choice.completion_text):
