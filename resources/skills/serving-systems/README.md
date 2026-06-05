@@ -39,10 +39,11 @@ This collection assumes existing kernel libraries. Writing new CUDA / Triton / C
 
 ## Setup
 
-The runtime CLIs auto-load this skill from `resources/skills/serving-systems/`
-via the `--skills-dir` flag (default in `cli_common.py`),
-copying the skill tree into each workspace's `.claude/skills/` so the
-in-workspace coding agent picks it up.
+Local usage is reference-only and manual by default. If your execution context
+supports local skill roots, point it at
+`resources/skills/serving-systems` for the local `SKILL.md` router plus
+`references/*.md` content; no automatic in-repo `--skills-dir` loader path is
+built into this repository today.
 
 The engine reference checkout is not bundled in this repository. If you want
 engine source anchors in the `references/engines/*.md` notes, set

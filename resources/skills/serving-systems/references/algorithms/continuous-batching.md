@@ -463,7 +463,7 @@ out = flash_attn_with_kvcache(
 
 For CUDA graphs, static metadata tensor shapes are necessary but not sufficient. Validate the exact FlashAttention version and kernel path before assuming a graph captured at `cache_seqlens=N` can be replayed at `N+1`; local FA2 probes replayed the shorter effective length. The safe choices are eager/piecewise attention, or full capture by fixed length bucket.
 
-**Full coverage, including the paged-KV contract and a minimal KV manager**: [`backends/flashattention/SKILL.md`](../backends/flashattention.md) and its [`#paged-kv-manager`](../../../backends/flashattention/#paged-kv-manager).
+**Full coverage, including the paged-KV contract and a minimal KV manager**: [`backends/flashattention.md`](../backends/flashattention.md) and its [`#paged-kv-manager`](../backends/flashattention.md#paged-kv-manager).
 
 ## Option 2: paged KV with plan/run wrappers (FlashInfer)
 

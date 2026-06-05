@@ -1,6 +1,6 @@
 # AMD Instinct MI300 family
 
-Hardware spec reference. For ROCm kernel / engine guidance, see the [`backends/*`](../../backends/) and [`engines/*`](../../engines/) skills.
+Hardware spec reference. For ROCm kernel / engine guidance, see the [`backends/*`](../backends/) and [`engines/*`](../engines/) skills.
 
 ## SKU matrix
 

@@ -262,7 +262,7 @@ Each diagnosis should include:
 1. Identify hot kernels (from nsys kern_sum or the timeline).
 2. `ncu --kernel-name X --set full`.
 3. Inspect occupancy / memory / warp stalls / roofline.
-4. Recommend kernel or launch-config changes (or switch to a better backend — see [`backends/*`](../../backends/)).
+4. Recommend kernel or launch-config changes (or switch to a better backend — see [`backends/*`](../backends/)).
 5. Validate with reprofile.
 
 ## Agent-feedback format (for passing findings to a coding agent)

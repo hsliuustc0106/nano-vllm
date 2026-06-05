@@ -100,6 +100,6 @@ Engines usually fuse Q/K/V and gate/up into single linear layers; the loader con
 - [`algorithms/attention-variants/`](../algorithms/attention-variants.md) — MHA / MQA / GQA / SWA / QK-norm catalog + backend compatibility
 - [`tooling/io-handling/`](../tooling/io-handling.md) — tokenization, chat templates (per-family BOS / turn-marker conventions), BOS double-add pitfalls
 - [`engines/vllm/`](../engines/vllm.md), [`engines/sglang/`](../engines/sglang.md), [`engines/trtllm/`](../engines/trtllm.md) — where each engine implements these models
-- [`algorithms/*`](../../algorithms/) — every standard serving algorithm applies to this family (text-dense is the default calibration target)
+- [`algorithms/*`](../algorithms/) — every standard serving algorithm applies to this family (text-dense is the default calibration target)
 - [`models/text-moe/`](text-moe.md) — the MoE variant
 - [`backends/flashinfer/`](../backends/flashinfer.md), [`backends/flashattention/`](../backends/flashattention.md) — attention backends

@@ -1,6 +1,6 @@
 # NVIDIA GPUs for serving
 
-Hardware spec reference across five generations. For backend / algorithm / kernel-choice guidance, see the relevant [`backends/*`](../../backends/) and [`algorithms/*`](../../algorithms/) skills.
+Hardware spec reference across five generations. For backend / algorithm / kernel-choice guidance, see the relevant [`backends/*`](../backends/) and [`algorithms/*`](../algorithms/) skills.
 
 ## Generations at a glance
 
