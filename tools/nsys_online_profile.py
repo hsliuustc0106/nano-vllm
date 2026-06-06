@@ -121,11 +121,11 @@ def run(args):
                 str(args.prewarm_prompts),
                 "--request-rate",
                 args.request_rate,
-                "--vllm-bin",
-                args.vllm_bin,
                 "--timeout",
                 str(args.timeout),
             ]
+            if args.vllm_bin:
+                prewarm_cmd.extend(["--vllm-bin", args.vllm_bin])
             print("prewarm:", " ".join(prewarm_cmd), flush=True)
             subprocess.run(prewarm_cmd, check=True)
 
@@ -152,11 +152,11 @@ def run(args):
             str(args.concurrency),
             "--request-rate",
             args.request_rate,
-            "--vllm-bin",
-            args.vllm_bin,
             "--timeout",
             str(args.timeout),
         ]
+        if args.vllm_bin:
+            bench_cmd.extend(["--vllm-bin", args.vllm_bin])
         print("benchmark:", " ".join(bench_cmd), flush=True)
         if not args.include_startup:
             print("profile_start", flush=True)
@@ -199,7 +199,7 @@ def main():
     parser.add_argument("--max-tokens", type=int, default=32)
     parser.add_argument("--concurrency", type=int, default=64)
     parser.add_argument("--request-rate", default="inf")
-    parser.add_argument("--vllm-bin", default="vllm")
+    parser.add_argument("--vllm-bin", default=None)
     parser.add_argument("--max-model-len", type=int, default=1024)
     parser.add_argument("--max-num-seqs", type=int, default=64)
     parser.add_argument("--max-num-batched-tokens", type=int, default=4096)

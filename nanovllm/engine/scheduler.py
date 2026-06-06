@@ -48,7 +48,7 @@ class Scheduler:
             self.block_manager.deallocate(seq)
 
     def schedule(self) -> tuple[list[Sequence], bool]:
-        if self.running and (not self.waiting or self.last_schedule_was_prefill):
+        if self.running and (not self.waiting or len(self.running) >= self.max_num_seqs):
             return self._schedule_decode()
 
         scheduled_seqs = []

@@ -1,5 +1,7 @@
 import argparse
+import importlib.util
 import os
+import shutil
 import statistics
 import subprocess
 import sys
@@ -20,7 +22,7 @@ BENCHMARK_PRESETS = {
         "concurrency": 64,
         "max_model_len": 1024,
         "max_num_seqs": 64,
-        "max_num_batched_tokens": 4096,
+        "max_num_batched_tokens": 8192,
     },
     "long-throughput-8k-1k": {
         "num_prompts": 16,
@@ -124,8 +126,7 @@ def run_online(args):
     input_len, range_ratio = random_input_len_and_ratio(args)
     if args.stream:
         print("note: vllm bench serve uses streaming OpenAI completions for this backend.", flush=True)
-    cmd = [
-        args.vllm_bin,
+    cmd = resolve_vllm_cmd(args.vllm_bin) + [
         "bench",
         "serve",
         "--backend",
@@ -162,6 +163,17 @@ def run_online(args):
     subprocess.run(cmd, check=True)
 
 
+def resolve_vllm_cmd(vllm_bin: str | None) -> list[str]:
+    if vllm_bin:
+        return [vllm_bin]
+    if importlib.util.find_spec("vllm") is not None:
+        return [sys.executable, "-m", "vllm.entrypoints.cli.main"]
+    binary = shutil.which("vllm")
+    if binary is not None:
+        return [binary]
+    raise RuntimeError("vllm is not installed; run `uv pip install vllm` or pass --vllm-bin")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Compare Nano-vLLM offline batch and online HTTP serving speed.")
     parser.add_argument(
@@ -183,7 +195,7 @@ def main():
     parser.add_argument("--vocab-size", type=int, default=10000)
     parser.add_argument("--concurrency", type=int, default=32)
     parser.add_argument("--request-rate", default="inf")
-    parser.add_argument("--vllm-bin", default="vllm")
+    parser.add_argument("--vllm-bin", default=None)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--max-model-len", type=int, default=1024)
     parser.add_argument("--max-num-seqs", type=int, default=64)

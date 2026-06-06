@@ -5,10 +5,14 @@ from nanovllm.serve.openai import CompletionRequestError, normalize_completion_r
 
 class FakeTokenizer:
 
+    def __init__(self):
+        self.decode_calls = []
+
     def encode(self, text):
         return [ord(char) for char in text]
 
     def decode(self, token_ids):
+        self.decode_calls.append(list(token_ids))
         return "".join(chr(token_id) for token_id in token_ids)
 
 
@@ -34,9 +38,17 @@ class CompletionRequestTests(unittest.TestCase):
         self.assertEqual([prompt.text for prompt in strings.prompts], ["a", "b"])
 
         tokens = self.normalize(prompt=[65, 66])
-        self.assertEqual(tokens.prompts[0].text, "AB")
+        self.assertEqual(tokens.prompts[0].text, "")
 
         token_prompts = self.normalize(prompt=[[65], [66]])
+        self.assertEqual([prompt.text for prompt in token_prompts.prompts], ["", ""])
+        self.assertEqual(self.tokenizer.decode_calls, [])
+
+    def test_decodes_token_prompts_when_echo_needs_prompt_text(self):
+        tokens = self.normalize(prompt=[65, 66], echo=True)
+        self.assertEqual(tokens.prompts[0].text, "AB")
+
+        token_prompts = self.normalize(prompt=[[65], [66]], echo=True)
         self.assertEqual([prompt.text for prompt in token_prompts.prompts], ["A", "B"])
 
     def test_normalizes_n_stop_stream_echo_and_ignore_eos(self):

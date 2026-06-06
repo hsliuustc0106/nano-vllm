@@ -22,6 +22,9 @@ def _add_serve_args(parser: argparse.ArgumentParser):
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--frontend-binary", default=None)
+    parser.add_argument("--trace-http", action="store_true", help="Enable per-request tracing in the Rust HTTP frontend.")
+    parser.add_argument("--stream-token-flush-interval", type=int, default=16)
+    parser.add_argument("--log-serving-stats-interval", type=float, default=0.0)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -70,6 +73,10 @@ def _serve(args: argparse.Namespace) -> int:
         str(args.max_num_batched_tokens),
         "--gpu-memory-utilization",
         str(args.gpu_memory_utilization),
+        "--stream-token-flush-interval",
+        str(getattr(args, "stream_token_flush_interval", 16)),
+        "--log-serving-stats-interval",
+        str(getattr(args, "log_serving_stats_interval", 0.0)),
     ]
     if args.enforce_eager:
         engine_cmd.append("--enforce-eager")
@@ -87,6 +94,8 @@ def _serve(args: argparse.Namespace) -> int:
         "--event-endpoint",
         args.event_endpoint,
     ]
+    if getattr(args, "trace_http", False):
+        frontend_cmd.append("--trace-http")
 
     engine = None
     frontend = None

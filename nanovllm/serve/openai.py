@@ -106,15 +106,15 @@ def _normalize_stop(value: Any) -> list[str]:
     return stops
 
 
-def _normalize_prompt(prompt: Any, tokenizer) -> list[NormalizedPrompt]:
+def _normalize_prompt(prompt: Any, tokenizer, decode_token_prompts: bool) -> list[NormalizedPrompt]:
     if isinstance(prompt, str):
         prompts = [(tokenizer.encode(prompt), prompt)]
     elif isinstance(prompt, list) and _is_str_list(prompt):
         prompts = [(tokenizer.encode(item), item) for item in prompt]
     elif isinstance(prompt, list) and _is_token_id_list(prompt):
-        prompts = [(prompt, tokenizer.decode(prompt))]
+        prompts = [(prompt, tokenizer.decode(prompt) if decode_token_prompts else "")]
     elif isinstance(prompt, list) and _is_token_prompt_list(prompt):
-        prompts = [(item, tokenizer.decode(item)) for item in prompt]
+        prompts = [(item, tokenizer.decode(item) if decode_token_prompts else "") for item in prompt]
     else:
         raise CompletionRequestError("prompt must be a string, list of strings, token ids, or list of token id lists")
     normalized = [NormalizedPrompt(list(token_ids), text) for token_ids, text in prompts]
@@ -156,7 +156,7 @@ def normalize_completion_request(payload: dict[str, Any], tokenizer) -> Normaliz
     return NormalizedCompletionRequest(
         request_id=request_id,
         model=model,
-        prompts=_normalize_prompt(payload["prompt"], tokenizer),
+        prompts=_normalize_prompt(payload["prompt"], tokenizer, echo),
         max_tokens=max_tokens,
         temperature=float(temperature),
         stream=stream,
