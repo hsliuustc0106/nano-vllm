@@ -1,6 +1,6 @@
 # Serving Benchmark Results
 
-Date: 2026-06-06
+Date: 2026-06-07
 
 Environment:
 - Model: Qwen/Qwen3-0.6B local snapshot
@@ -10,16 +10,20 @@ Environment:
 - Benchmark harness: `vllm bench serve --backend openai --endpoint /v1/completions --dataset-name random`
 - Nano-vLLM frontend: rebuilt `rust/nanovllm-serve/target/debug/nanovllm-serve`
 
-## Latest Online Serving Comparison (all runs: 0 failures)
+## Latest Online Serving Comparison (formal `vllm bench serve`, all runs: 0 failures)
 
-| Preset | Server | Successful | Mean elapsed (s) | Completion throughput (tok/s) | Per-request latency p50 (s) |
-|:--|:--|--:|--:|--:|--:|
-| short-throughput, input 128, output 64, prompts 128, concurrency 64 | Nano-vLLM | 128 | 0.580 | 14.12k | 0.27 - 0.29 |
-| short-throughput, input 128, output 64, prompts 128, concurrency 64 | vLLM 0.22.1 | 128 | 0.629 | 13.0k | ~0.30 |
-| long-throughput-8k-1k, input 8192, output 1024, prompts 16, concurrency 16 | Nano-vLLM | 16 | 9.525 | 1.72k | ~9.5 |
-| long-throughput-8k-1k, input 8192, output 1024, prompts 16, concurrency 16 | vLLM 0.22.1 | 16 | 6.053 | 2.71k | ~6.04 |
-| low-latency-32k-2k, input 32768, output 2048, prompts 4, concurrency 1 | Nano-vLLM | 4 | 28.76 | 285 | 6.9 - 7.3 |
-| low-latency-32k-2k, input 32768, output 2048, prompts 4, concurrency 1 | vLLM 0.22.1 | 4 | 25.38 | 323 | 6.3 - 6.6 |
+| Preset | Server | Successful | Duration (s) | Output tok/s | Mean TTFT ms | Mean TPOT ms | Mean ITL ms |
+|:--|:--|--:|--:|--:|--:|--:|--:|
+| short-throughput, input 128, output 64, prompts 128, concurrency 64 | Nano-vLLM | 128 | 1.54 | 5324.41 | 590.15 | 2.75 | 34.69 |
+| short-throughput, input 128, output 64, prompts 128, concurrency 64 | vLLM 0.22.1 | 128 | 0.70 | 11688.98 | 151.18 | 3.05 | 3.20 |
+| long-throughput-8k-1k, input 8192, output 1024, prompts 16, concurrency 16 | Nano-vLLM | 16 | 10.66 | 1537.41 | 1595.60 | 8.85 | 139.28 |
+| long-throughput-8k-1k, input 8192, output 1024, prompts 16, concurrency 16 | vLLM 0.22.1 | 16 | 6.64 | 2466.68 | 954.72 | 5.50 | 6.13 |
+| low-latency-32k-2k, input 32768, output 2048, prompts 4, concurrency 1 | Nano-vLLM | 4 | 29.66 | 276.21 | 803.21 | 3.23 | 3.23 |
+| low-latency-32k-2k, input 32768, output 2048, prompts 4, concurrency 1 | vLLM 0.22.1 | 4 | 25.22 | 324.81 | 442.66 | 2.86 | 2.87 |
+
+The previous refreshed table that reported Nano-vLLM short-throughput around
+14.12k tok/s was not reproduced by a fresh formal `vllm bench serve` rerun. The
+current table above uses the direct harness output from the verified rerun.
 
 ## Historical Online Serving Results
 
