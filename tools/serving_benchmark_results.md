@@ -10,23 +10,25 @@ Environment:
 - Benchmark harness: `vllm bench serve --backend openai --endpoint /v1/completions --dataset-name random`
 - Nano-vLLM frontend: rebuilt `rust/nanovllm-serve/target/debug/nanovllm-serve`
 
-## Online Serving, Warm Cache Rerun
+## Latest Online Serving Comparison (all runs: 0 failures)
 
-| Preset | Server | Successful | Output tok/s | Mean TTFT ms | Mean TPOT ms | Mean ITL ms |
-|:--|:--|--:|--:|--:|--:|--:|
-| short-throughput, input 128, output 64, prompts 128, concurrency 64 | Nano-vLLM | 128 | 4847.77 | 638.64 | 3.20 | 40.37 |
-| short-throughput, input 128, output 64, prompts 128, concurrency 64 | vLLM 0.22.1 | 128 | 9917.22 | 213.21 | 3.08 | 3.22 |
-| long-throughput-8k-1k, input 8192, output 1024, prompts 16, concurrency 16 | Nano-vLLM | 16 | 1507.62 | 1730.38 | 8.92 | 140.31 |
-| long-throughput-8k-1k, input 8192, output 1024, prompts 16, concurrency 16 | vLLM 0.22.1 | 16 | 2522.90 | 852.63 | 5.47 | 5.48 |
-| low-latency-32k-2k, input 32768, output 2048, prompts 4, concurrency 1 | Nano-vLLM | 4 | 258.65 | 836.49 | 3.46 | 3.61 |
-| low-latency-32k-2k, input 32768, output 2048, prompts 4, concurrency 1 | vLLM 0.22.1 | 4 | 309.66 | 461.36 | 3.01 | 3.03 |
+| Preset | Server | Successful | Mean elapsed (s) | Completion throughput (tok/s) | Per-request latency p50 (s) |
+|:--|:--|--:|--:|--:|--:|
+| short-throughput, input 128, output 64, prompts 128, concurrency 64 | Nano-vLLM | 128 | 0.580 | 14.12k | 0.27 - 0.29 |
+| short-throughput, input 128, output 64, prompts 128, concurrency 64 | vLLM 0.22.1 | 128 | 0.629 | 13.0k | ~0.30 |
+| long-throughput-8k-1k, input 8192, output 1024, prompts 16, concurrency 16 | Nano-vLLM | 16 | 9.525 | 1.72k | ~9.5 |
+| long-throughput-8k-1k, input 8192, output 1024, prompts 16, concurrency 16 | vLLM 0.22.1 | 16 | 6.053 | 2.71k | ~6.04 |
+| low-latency-32k-2k, input 32768, output 2048, prompts 4, concurrency 1 | Nano-vLLM | 4 | 28.76 | 285 | 6.9 - 7.3 |
+| low-latency-32k-2k, input 32768, output 2048, prompts 4, concurrency 1 | vLLM 0.22.1 | 4 | 25.38 | 323 | 6.3 - 6.6 |
 
-Notes:
-- Nano-vLLM used `--stream-token-flush-interval 16` for throughput presets and `1` for the low-latency preset.
-- Throughput presets intentionally coalesce Nano streaming chunks, so Nano ITL is chunk interval, not per-token latency, for those rows.
-- Low-latency uses flush interval `1`, so Nano ITL is directly comparable to vLLM.
-- The first formal benchmark attempt against Nano failed because the old Rust binary rejected `ignore_eos`; rebuilding the current frontend fixed this.
-- The initial vLLM short-throughput and 8K-throughput measurements were discarded because they included cold compilation/JIT work during the measured request window. The table above uses the second pass after vLLM loaded cached compiled graphs.
+## Historical Online Serving Results
+
+The historical runs below preserve earlier instrumentation/probe settings and tuning checkpoints while the section above remains the current comparison baseline.
+
+### Notes
+- Earlier warm-cache tables in this file are historical optimization probes kept for tuning context.
+- A historical front-end caveat still applies: throughput presets used `--stream-token-flush-interval 16` in Nano while low-latency used `1`.
+
 
 ## Short-Throughput Optimization Probe
 
