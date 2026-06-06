@@ -114,6 +114,24 @@ class ModelRunner:
     def reset_stats(self):
         self.stats = ModelRunnerStats()
 
+    @staticmethod
+    def build_graph_batch_sizes(max_bs: int) -> list[int]:
+        graph_bs = [bs for bs in [1, 2, 4, 8] if bs <= max_bs]
+        graph_bs.extend(range(16, max_bs + 1, 16))
+        if graph_bs[-1] < max_bs:
+            graph_bs.append(max_bs)
+        return graph_bs
+
+    @staticmethod
+    def build_graph_batch_lookup(graph_bs: list[int], max_bs: int) -> list[int]:
+        graph_bs_for_actual_bs = [0] * (max_bs + 1)
+        graph_index = 0
+        for bs in range(1, max_bs + 1):
+            while graph_bs[graph_index] < bs:
+                graph_index += 1
+            graph_bs_for_actual_bs[bs] = graph_bs[graph_index]
+        return graph_bs_for_actual_bs
+
     def warmup_sampler(self):
         if self.rank != 0:
             return
@@ -276,7 +294,7 @@ class ModelRunner:
             token_ids = token_tensor.tolist()
             tolist_end = perf_counter()
         else:
-            sampler_end = tolist_end = model_end
+            sampler_start = sampler_end = tolist_end = model_end
             token_ids = None
         if is_prefill:
             self.stats.prepare_prefill_ns += int((prepare_end - prepare_start) * 1e9)
@@ -309,7 +327,7 @@ class ModelRunner:
         block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
         output_size = hf_config.vocab_size if self.graph_includes_logits else hf_config.hidden_size
         outputs = torch.zeros(max_bs, output_size)
-        self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
+        self.graph_bs = self.build_graph_batch_sizes(max_bs)
         self.graphs = {}
         self.graph_pool = None
 
@@ -335,9 +353,4 @@ class ModelRunner:
             block_tables=block_tables,
             outputs=outputs,
         )
-        self.graph_bs_for_actual_bs = [0] * (max_bs + 1)
-        graph_index = 0
-        for bs in range(1, max_bs + 1):
-            while self.graph_bs[graph_index] < bs:
-                graph_index += 1
-            self.graph_bs_for_actual_bs[bs] = self.graph_bs[graph_index]
+        self.graph_bs_for_actual_bs = self.build_graph_batch_lookup(self.graph_bs, max_bs)
