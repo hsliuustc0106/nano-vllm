@@ -159,6 +159,16 @@ def run_online(args):
         str(args.seed),
         "--disable-tqdm",
     ]
+    if args.num_warmups:
+        cmd.extend(["--num-warmups", str(args.num_warmups)])
+    if args.top_p is not None:
+        cmd.extend(["--top-p", str(args.top_p)])
+    if args.top_k is not None:
+        cmd.extend(["--top-k", str(args.top_k)])
+    if args.min_p is not None:
+        cmd.extend(["--min-p", str(args.min_p)])
+    if args.extra_body:
+        cmd.extend(["--extra-body", args.extra_body])
     print("vllm_bench_cmd", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True)
 
@@ -190,6 +200,11 @@ def main():
     parser.add_argument("--max-input-len", type=int, default=64)
     parser.add_argument("--max-tokens", type=int, default=32)
     parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--top-p", type=float, default=None)
+    parser.add_argument("--top-k", type=int, default=None)
+    parser.add_argument("--min-p", type=float, default=None)
+    parser.add_argument("--extra-body", help="JSON object forwarded to `vllm bench serve --extra-body`.")
+    parser.add_argument("--num-warmups", type=int, default=0, help="Forwarded to `vllm bench serve --num-warmups`; 0 preserves cold first-burst behavior.")
     parser.add_argument("--stream", action="store_true", help="Accepted for compatibility; vLLM's OpenAI completions benchmark streams by default.")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--vocab-size", type=int, default=10000)
