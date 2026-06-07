@@ -13,6 +13,7 @@ class Context:
     context_lens: torch.Tensor | None = None
     block_tables: torch.Tensor | None = None
     graph_resident: bool = False
+    flashinfer_decode_wrapper: object | None = None
 
 _CONTEXT = Context()
 
@@ -29,6 +30,7 @@ def set_context(
     context_lens=None,
     block_tables=None,
     graph_resident=False,
+    flashinfer_decode_wrapper=None,
 ):
     global _CONTEXT
     _CONTEXT = Context(
@@ -41,6 +43,7 @@ def set_context(
         context_lens,
         block_tables,
         graph_resident,
+        flashinfer_decode_wrapper,
     )
 
 def reset_context():
