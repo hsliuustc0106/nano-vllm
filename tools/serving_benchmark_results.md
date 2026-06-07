@@ -24,6 +24,29 @@ Environment:
 These rows use the first measured benchmark burst after the server is ready,
 with no explicit `vllm bench serve --num-warmups` requests.
 
+## High-Concurrency 4K/1K Follow-up
+
+The run below uses the same formal `vllm bench serve` OpenAI completions
+benchmark, seed `0`, random token prompts, no explicit warmup requests, and
+64 prompts at concurrency 64. Both servers used the same local
+`Qwen/Qwen3-0.6B` snapshot after fetching the missing `model.safetensors`;
+an earlier Nano-only smoke run against the config/tokenizer-only cache was
+discarded as invalid for performance comparison.
+
+Server launch settings:
+- Nano-vLLM: `--max-model-len 32768 --max-num-seqs 64 --max-num-batched-tokens 32768 --stream-token-flush-interval 16`
+- vLLM 0.22.1: `--max-model-len 32768 --max-num-seqs 64 --max-num-batched-tokens 32768 --generation-config vllm`
+
+| Preset | Server | Successful | Duration (s) | Output tok/s | Mean TTFT ms | Mean TPOT ms | Mean ITL ms |
+|:--|:--|--:|--:|--:|--:|--:|--:|
+| input 4096, output 1024, prompts 64, concurrency 64 | Nano-vLLM | 64 | 12.90 | 5078.45 | 1284.65 | 11.34 | 178.49 |
+| input 4096, output 1024, prompts 64, concurrency 64 | vLLM 0.22.1 | 64 | 10.94 | 5990.11 | 1190.37 | 9.39 | 9.45 |
+
+For this high-concurrency 4K/1K shape, upstream vLLM is `1.18x` faster on
+output token throughput. Raw logs:
+`/tmp/nano_qwen3_0_6b_4k_1k_c64_weighted.log` and
+`/tmp/vllm_qwen3_0_6b_4k_1k_c64_weighted.log`.
+
 ## Short-Throughput Warmup/Profile Follow-up
 
 Short online serving is sensitive to first-burst warmup effects. A small
