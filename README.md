@@ -155,6 +155,7 @@ nanovllm serve \
   --max-model-len 32768 \
   --max-num-seqs 16 \
   --max-num-batched-tokens 32768 \
+  --kvcache-block-size 32 \
   --stream-token-flush-interval 16
 
 python tools/compare_serving_bench.py \

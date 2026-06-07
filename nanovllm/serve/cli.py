@@ -19,6 +19,7 @@ def _add_serve_args(parser: argparse.ArgumentParser):
     parser.add_argument("--max-model-len", type=int, default=4096)
     parser.add_argument("--max-num-seqs", type=int, default=512)
     parser.add_argument("--max-num-batched-tokens", type=int, default=16384)
+    parser.add_argument("--kvcache-block-size", type=int, default=256)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--frontend-binary", default=None)
@@ -71,6 +72,8 @@ def _serve(args: argparse.Namespace) -> int:
         str(args.max_num_seqs),
         "--max-num-batched-tokens",
         str(args.max_num_batched_tokens),
+        "--kvcache-block-size",
+        str(args.kvcache_block_size),
         "--gpu-memory-utilization",
         str(args.gpu_memory_utilization),
         "--stream-token-flush-interval",

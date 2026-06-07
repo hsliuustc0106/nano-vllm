@@ -641,6 +641,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-model-len", type=int, default=4096)
     parser.add_argument("--max-num-seqs", type=int, default=512)
     parser.add_argument("--max-num-batched-tokens", type=int, default=16384)
+    parser.add_argument("--kvcache-block-size", type=int, default=256)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--stream-token-flush-interval", type=int, default=DEFAULT_STREAM_TOKEN_FLUSH_INTERVAL)
@@ -660,6 +661,7 @@ def main(argv: list[str] | None = None):
         max_model_len=args.max_model_len,
         max_num_seqs=args.max_num_seqs,
         max_num_batched_tokens=args.max_num_batched_tokens,
+        kvcache_block_size=args.kvcache_block_size,
         gpu_memory_utilization=args.gpu_memory_utilization,
         enforce_eager=args.enforce_eager,
         enable_runner_stats=args.log_serving_stats_interval > 0,

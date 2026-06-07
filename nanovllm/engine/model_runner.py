@@ -48,6 +48,8 @@ class ModelRunner:
         self.graph_includes_logits = self.world_size == 1
         self.graph_includes_sampler = self.world_size == 1
         self.use_flashinfer_decode = flashinfer is not None and self.world_size == 1 and not self.enforce_eager
+        if self.block_size < 256 and not self.use_flashinfer_decode:
+            raise ValueError("kvcache_block_size below 256 requires single-GPU FlashInfer CUDA-graph decode")
         self.stats = ModelRunnerStats()
 
         dist.init_process_group("nccl", "tcp://localhost:2333", world_size=self.world_size, rank=rank)
@@ -64,7 +66,10 @@ class ModelRunner:
         self.warmup_model()
         self.allocate_kv_cache()
         if not self.enforce_eager:
-            self.graph_bs = self.build_graph_batch_sizes(config.max_num_seqs)
+            if self.use_flashinfer_decode and self.block_size < 256:
+                self.graph_bs = [config.max_num_seqs]
+            else:
+                self.graph_bs = self.build_graph_batch_sizes(config.max_num_seqs)
         self.warmup_sampler()
         if not self.enforce_eager:
             self.capture_cudagraph()

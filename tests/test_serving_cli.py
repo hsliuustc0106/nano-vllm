@@ -18,6 +18,7 @@ class ServingCliTests(unittest.TestCase):
         self.assertEqual(args.port, 8000)
         self.assertEqual(args.request_endpoint, "tcp://127.0.0.1:5557")
         self.assertEqual(args.event_endpoint, "tcp://127.0.0.1:5558")
+        self.assertEqual(args.kvcache_block_size, 256)
         self.assertEqual(args.stream_token_flush_interval, 16)
         self.assertEqual(args.log_serving_stats_interval, 0.0)
 
@@ -43,9 +44,12 @@ class ServingCliTests(unittest.TestCase):
             "1",
             "--log-serving-stats-interval",
             "2.5",
+            "--kvcache-block-size",
+            "16",
         ])
         self.assertEqual(args.stream_token_flush_interval, 1)
         self.assertEqual(args.log_serving_stats_interval, 2.5)
+        self.assertEqual(args.kvcache_block_size, 16)
 
     def test_frontend_binary_finds_scripts_dir_sibling(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -73,6 +77,7 @@ class ServingCliTests(unittest.TestCase):
             max_model_len=4096,
             max_num_seqs=512,
             max_num_batched_tokens=16384,
+            kvcache_block_size=256,
             gpu_memory_utilization=0.9,
             enforce_eager=False,
             frontend_binary="/tmp/nanovllm-serve",
@@ -104,6 +109,7 @@ class ServingCliTests(unittest.TestCase):
             max_model_len=4096,
             max_num_seqs=512,
             max_num_batched_tokens=16384,
+            kvcache_block_size=256,
             gpu_memory_utilization=0.9,
             enforce_eager=False,
             frontend_binary="/tmp/nanovllm-serve",
@@ -127,6 +133,7 @@ class ServingCliTests(unittest.TestCase):
             max_model_len=4096,
             max_num_seqs=512,
             max_num_batched_tokens=16384,
+            kvcache_block_size=256,
             gpu_memory_utilization=0.9,
             enforce_eager=False,
             frontend_binary="/tmp/nanovllm-serve",

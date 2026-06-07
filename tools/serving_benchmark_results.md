@@ -16,7 +16,7 @@ Environment:
 |:--|:--|--:|--:|--:|--:|--:|--:|
 | short-throughput, input 128, output 64, prompts 128, concurrency 64 | Nano-vLLM | 128 | 1.54 | 5324.41 | 590.15 | 2.75 | 34.69 |
 | short-throughput, input 128, output 64, prompts 128, concurrency 64 | vLLM 0.22.1 | 128 | 0.70 | 11688.98 | 151.18 | 3.05 | 3.20 |
-| long-throughput-8k-1k, input 8192, output 1024, prompts 16, concurrency 16 | Nano-vLLM | 16 | 6.90 | 2373.46 | 690.57 | 6.04 | 95.11 |
+| long-throughput-8k-1k, input 8192, output 1024, prompts 16, concurrency 16 | Nano-vLLM | 16 | 6.58 | 2491.83 | 648.31 | 5.79 | 91.12 |
 | long-throughput-8k-1k, input 8192, output 1024, prompts 16, concurrency 16 | vLLM 0.22.1 | 16 | 6.64 | 2466.68 | 954.72 | 5.50 | 6.13 |
 | low-latency-32k-2k, input 32768, output 2048, prompts 4, concurrency 1 | Nano-vLLM | 4 | 29.66 | 276.21 | 803.21 | 3.23 | 3.23 |
 | low-latency-32k-2k, input 32768, output 2048, prompts 4, concurrency 1 | vLLM 0.22.1 | 4 | 25.22 | 324.81 | 442.66 | 2.86 | 2.87 |
@@ -24,7 +24,7 @@ Environment:
 These rows use the first measured benchmark burst after the server is ready,
 with no explicit `vllm bench serve --num-warmups` requests.
 
-### Long 8K/1K RoPE Follow-up
+### Long 8K/1K RoPE And KV-Page Follow-up
 
 Replacing the TorchInductor rotary embedding path with
 `flashinfer.apply_rope_with_cos_sin_cache_inplace` improved the target
@@ -33,15 +33,21 @@ long-throughput row from the latest stable real-weight Nano run
 `2373.46` output tok/s, `690.57` ms mean TTFT, and `6.04` ms mean TPOT.
 Raw log: `/tmp/nano_qwen3_0_6b_8k_1k_c16_flashinfer_rope.log`.
 
-The remaining gap is still not fully closed versus the refreshed vLLM row
-(`2466.68` output tok/s here, and `2470.90` in the PR summary table). A
-throughput-only Nano run with `--stream-token-flush-interval 64` reached
-`2409.56` output tok/s but raised mean ITL to `359.78` ms, so it is not a
-drop-in replacement for the current `16`-token flush setting. Other rejected
-follow-ups: disabling FlashInfer decode and using FlashAttention default split
-heuristics (`1707.82` tok/s), FlashInfer tensor-core decode without split-KV
-(`2183.92` tok/s), FlashInfer sampling (`2285.00` tok/s), graph-resident
-metadata advance (`2269.22` tok/s), and split-KV decode (`2212.55` tok/s).
+Adding `--kvcache-block-size 32` for the same long-throughput serving preset
+then improved Nano-vLLM to `2491.83` output tok/s, slightly above the refreshed
+vLLM row (`2466.68` output tok/s here, and `2470.90` in the PR summary table).
+The 32-token KV page run used `--stream-token-flush-interval 16`, so it is not
+trading away the existing streaming flush cadence. Raw log:
+`/tmp/nano_qwen3_0_6b_8k_1k_c16_rope_block32.log`.
+
+Rejected follow-ups: a 16-token KV page run improved decode TPOT but only
+reached `2420.59` tok/s, a throughput-only run with
+`--stream-token-flush-interval 64` reached `2409.56` output tok/s while raising
+mean ITL to `359.78` ms, disabling FlashInfer decode and using FlashAttention
+default split heuristics reached `1707.82` tok/s, FlashInfer tensor-core decode
+without split-KV reached `2183.92` tok/s, FlashInfer sampling reached
+`2285.00` tok/s, graph-resident metadata advance reached `2269.22` tok/s, and
+split-KV decode reached `2212.55` tok/s.
 
 ## High-Concurrency 4K/1K Follow-up
 
