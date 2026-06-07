@@ -59,18 +59,18 @@ an earlier Nano-only smoke run against the config/tokenizer-only cache was
 discarded as invalid for performance comparison.
 
 Server launch settings:
-- Nano-vLLM: `--max-model-len 32768 --max-num-seqs 64 --max-num-batched-tokens 32768 --stream-token-flush-interval 16`
+- Nano-vLLM: `--max-model-len 32768 --max-num-seqs 64 --max-num-batched-tokens 32768 --kvcache-block-size 32 --stream-token-flush-interval 16`
 - vLLM 0.22.1: `--max-model-len 32768 --max-num-seqs 64 --max-num-batched-tokens 32768 --generation-config vllm`
 
 | Preset | Server | Successful | Duration (s) | Output tok/s | Mean TTFT ms | Mean TPOT ms | Mean ITL ms |
 |:--|:--|--:|--:|--:|--:|--:|--:|
-| input 4096, output 1024, prompts 64, concurrency 64 | Nano-vLLM | 64 | 12.90 | 5078.45 | 1284.65 | 11.34 | 178.49 |
-| input 4096, output 1024, prompts 64, concurrency 64 | vLLM 0.22.1 | 64 | 10.94 | 5990.11 | 1190.37 | 9.39 | 9.45 |
+| input 4096, output 1024, prompts 64, concurrency 64 | Nano-vLLM | 64 | 12.16 | 5389.67 | 1105.12 | 10.79 | 169.86 |
+| input 4096, output 1024, prompts 64, concurrency 64 | vLLM 0.22.1 | 64 | 11.14 | 5884.47 | 1369.68 | 9.43 | 9.49 |
 
-For this high-concurrency 4K/1K shape, upstream vLLM is `1.18x` faster on
+For this high-concurrency 4K/1K shape, upstream vLLM is `1.09x` faster on
 output token throughput. Raw logs:
-`/tmp/nano_qwen3_0_6b_4k_1k_c64_weighted.log` and
-`/tmp/vllm_qwen3_0_6b_4k_1k_c64_weighted.log`.
+`/tmp/nano_qwen3_0_6b_4k_1k_c64_current.log` and
+`/tmp/vllm_qwen3_0_6b_4k_1k_c64_current.log`.
 
 ## Short-Throughput Warmup/Profile Follow-up
 
