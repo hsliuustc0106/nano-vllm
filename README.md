@@ -228,6 +228,22 @@ See `bench.py` for benchmark.
 | vLLM           | 133,966     | 98.37    | 1361.84               |
 | Nano-vLLM      | 133,966     | 93.41    | 1434.13               |
 
+## Accuracy Checks
+
+Nano-vLLM follows the vLLM GSM8K accuracy pattern:
+build few-shot prompts, call `/v1/completions`, parse final numeric answers,
+and compare accuracy with a configurable tolerance.
+
+If a server is already running on port `8000`, run:
+
+```bash
+pytest tests/evals/gsm8k/test_gsm8k_correctness.py \
+  --config-list-file=tests/evals/gsm8k/configs/models-small.txt
+```
+
+Update `tests/evals/gsm8k/configs/*.yaml` to point at your model, server URL,
+question count, and target threshold.
+
 
 ## Star History
 
