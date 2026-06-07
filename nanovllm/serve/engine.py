@@ -2,6 +2,7 @@ import argparse
 import signal
 import time
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Any, Callable
 
 import msgpack
@@ -16,7 +17,7 @@ from nanovllm.serve.text import StreamingTextDecoder, find_stop, next_delta, tri
 
 
 EventSink = Callable[[dict[str, Any]], None]
-STREAM_TOKEN_FLUSH_INTERVAL = 4
+DEFAULT_STREAM_TOKEN_FLUSH_INTERVAL = 16
 
 
 @dataclass(slots=True)
@@ -47,21 +48,84 @@ class ChoiceState:
     finished: bool = False
 
 
+@dataclass(slots=True)
+class ServingStats:
+    steps: int = 0
+    prefill_steps: int = 0
+    decode_steps: int = 0
+    prefill_tokens: int = 0
+    decode_tokens: int = 0
+    emitted_events: int = 0
+    requests: int = 0
+    request_messages: int = 0
+    request_normalize_ns: int = 0
+    request_add_ns: int = 0
+    step_schedule_ns: int = 0
+    step_model_ns: int = 0
+    step_postprocess_ns: int = 0
+    token_handle_ns: int = 0
+    event_emit_ns: int = 0
+
+
 class ServingLLMEngine(LLMEngine):
 
-    def __init__(self, model, event_sink: EventSink, **kwargs):
+    def __init__(
+        self,
+        model,
+        event_sink: EventSink,
+        stream_token_flush_interval: int = DEFAULT_STREAM_TOKEN_FLUSH_INTERVAL,
+        **kwargs,
+    ):
+        if stream_token_flush_interval < 1:
+            raise ValueError("stream_token_flush_interval must be >= 1")
         super().__init__(model, **kwargs)
         self.event_sink = event_sink
+        self.stream_token_flush_interval = stream_token_flush_interval
         self.active_requests: dict[str, ActiveRequest] = {}
         self.choices: dict[int, ChoiceState] = {}
+        self.stats = ServingStats()
 
     def add_completion_request(self, payload: dict[str, Any]):
+        self.add_completion_requests([payload])
+
+    def add_completion_requests(self, payloads: list[dict[str, Any]]):
+        normalize_start = perf_counter()
+        requests = []
+        simple_payloads = []
+        simple_indexes = []
+        for index, payload in enumerate(payloads):
+            prompt = payload.get("prompt")
+            echo = payload.get("echo", False)
+            if isinstance(prompt, str) and echo is False:
+                simple_indexes.append(index)
+                simple_payloads.append(payload)
+                requests.append(None)
+                continue
+            requests.append(self._normalize_completion_payload(payload))
+
+        if simple_payloads:
+            encoded_prompts = self.tokenizer([payload["prompt"] for payload in simple_payloads]).input_ids
+            for index, payload, token_ids in zip(simple_indexes, simple_payloads, encoded_prompts):
+                tokenized_payload = dict(payload)
+                tokenized_payload["prompt"] = token_ids
+                requests[index] = self._normalize_completion_payload(tokenized_payload)
+
+        self.stats.request_normalize_ns += int((perf_counter() - normalize_start) * 1e9)
+
+        for request in requests:
+            if request is not None:
+                self._add_normalized_completion_request(request)
+
+    def _normalize_completion_payload(self, payload: dict[str, Any]):
         try:
-            request = normalize_completion_request(payload, self.tokenizer)
+            return normalize_completion_request(payload, self.tokenizer)
         except CompletionRequestError as exc:
             self._emit_error(payload.get("request_id"), str(exc))
-            return
+            return None
 
+    def _add_normalized_completion_request(self, request):
+        add_start = perf_counter()
+        self.stats.requests += 1
         num_choices = len(request.prompts) * request.n
         prompt_tokens = sum(len(prompt.token_ids) for prompt in request.prompts) * request.n
         created = int(time.time())
@@ -106,6 +170,7 @@ class ServingLLMEngine(LLMEngine):
                 if request.stream and request.echo:
                     self._emit_token(request.request_id, choice_index, prompt.text, None)
                 choice_index += 1
+        self.stats.request_add_ns += int((perf_counter() - add_start) * 1e9)
 
     def cancel_request(self, request_id: str):
         active = self.active_requests.get(request_id)
@@ -118,15 +183,46 @@ class ServingLLMEngine(LLMEngine):
             self._finish_choice(choice, "cancelled")
 
     def step_serving(self):
-        appended, _ = self.step_with_token_events()
+        schedule_start = perf_counter()
+        seqs, is_prefill = self.scheduler.schedule()
+        num_tokens = sum(seq.num_scheduled_tokens for seq in seqs) if is_prefill else -len(seqs)
+        schedule_end = perf_counter()
+        token_ids = self.model_runner.call("run", seqs, is_prefill)
+        model_end = perf_counter()
+        appended = self.scheduler.postprocess(seqs, token_ids, is_prefill)
+        postprocess_end = perf_counter()
+        self.stats.step_schedule_ns += int((schedule_end - schedule_start) * 1e9)
+        self.stats.step_model_ns += int((model_end - schedule_end) * 1e9)
+        self.stats.step_postprocess_ns += int((postprocess_end - model_end) * 1e9)
+        self._record_step(num_tokens)
         for seq, token_id in appended:
             choice = self.choices.get(seq.seq_id)
             if choice is not None:
+                handle_start = perf_counter()
                 self._handle_token(choice, token_id)
+                self.stats.token_handle_ns += int((perf_counter() - handle_start) * 1e9)
+
+    def _record_step(self, num_tokens: int):
+        self.stats.steps += 1
+        if num_tokens > 0:
+            self.stats.prefill_steps += 1
+            self.stats.prefill_tokens += num_tokens
+        else:
+            self.stats.decode_steps += 1
+            self.stats.decode_tokens += -num_tokens
+
+    def reset_stats(self):
+        self.stats = ServingStats()
+        if hasattr(self.model_runner, "reset_stats"):
+            self.model_runner.reset_stats()
 
     def _handle_token(self, choice: ChoiceState, token_id: int):
         seq = choice.seq
         finish_reason = seq.finish_reason if seq.is_finished else None
+        if not choice.stream and not choice.stop:
+            if finish_reason is not None:
+                self._finish_choice(choice, finish_reason)
+            return
         if not choice.stop:
             self._handle_token_without_stop(choice, token_id, finish_reason)
             return
@@ -154,7 +250,7 @@ class ServingLLMEngine(LLMEngine):
         if not (seq.finish_reason == "stop" and token_id == self.tokenizer.eos_token_id):
             choice.decoder.buffer(token_id)
             choice.pending_tokens += 1
-        if choice.stream and (not choice.emitted_any or finished or choice.pending_tokens >= STREAM_TOKEN_FLUSH_INTERVAL):
+        if choice.stream and (not choice.emitted_any or finished or choice.pending_tokens >= self.stream_token_flush_interval):
             self._flush_decoded_delta(choice, finished)
         if finished:
             self._finish_choice(choice, finish_reason)
@@ -170,13 +266,9 @@ class ServingLLMEngine(LLMEngine):
         return delta
 
     def _queue_or_emit_token(self, choice: ChoiceState, delta: str, token_id: int, finished: bool):
-        if choice.stop:
-            self._emit_token(choice.request_id, choice.choice_index, delta, token_id)
-            choice.emitted_any = True
-            return
         choice.pending_text += delta
         choice.pending_tokens += 1
-        if not choice.emitted_any or finished or choice.pending_tokens >= STREAM_TOKEN_FLUSH_INTERVAL:
+        if not choice.emitted_any or finished or choice.pending_tokens >= self.stream_token_flush_interval:
             self._flush_pending_token(choice)
 
     def _flush_pending_token(self, choice: ChoiceState):
@@ -210,9 +302,15 @@ class ServingLLMEngine(LLMEngine):
             self._cleanup_finished_choice(choice)
             return
         seq = choice.seq
-        completion_text = choice.decoder.flush(finished=True)
-        if len(completion_text) < len(choice.completion_text):
-            completion_text = choice.completion_text
+        if not choice.stop and not choice.decoder.text and not choice.decoder.pending_token_ids:
+            completion_token_ids = seq.completion_token_ids
+            if seq.finish_reason == "stop" and completion_token_ids and completion_token_ids[-1] == self.tokenizer.eos_token_id:
+                completion_token_ids = completion_token_ids[:-1]
+            completion_text = self.tokenizer.decode(completion_token_ids)
+        else:
+            completion_text = choice.decoder.flush(finished=True)
+            if len(completion_text) < len(choice.completion_text):
+                completion_text = choice.completion_text
         stop_index = find_stop(completion_text, choice.stop)
         if stop_index is not None:
             completion_text = completion_text[:stop_index]
@@ -268,12 +366,18 @@ class ServingLLMEngine(LLMEngine):
         })
 
     def _emit(self, event: dict[str, Any]):
+        emit_start = perf_counter()
+        stats = getattr(self, "stats", None)
+        if isinstance(stats, ServingStats):
+            stats.emitted_events += 1
         self.event_sink(event)
+        if isinstance(stats, ServingStats):
+            stats.event_emit_ns += int((perf_counter() - emit_start) * 1e9)
 
 
 class ZmqEngineServer:
 
-    def __init__(self, engine: ServingLLMEngine, request_endpoint: str, event_endpoint: str):
+    def __init__(self, engine: ServingLLMEngine, request_endpoint: str, event_endpoint: str, stats_interval: float = 0.0):
         self.engine = engine
         self.context = zmq.Context.instance()
         self.request_socket = self.context.socket(zmq.PULL)
@@ -281,6 +385,8 @@ class ZmqEngineServer:
         self.poller = zmq.Poller()
         self.poller.register(self.request_socket, zmq.POLLIN)
         self.shutdown = False
+        self.stats_interval = stats_interval
+        self.last_stats_log = perf_counter()
 
     def run_forever(self):
         while not self.shutdown:
@@ -290,6 +396,51 @@ class ZmqEngineServer:
                 self._drain_requests()
             if not self.engine.is_finished():
                 self.engine.step_serving()
+            self._maybe_log_stats()
+
+    def _maybe_log_stats(self):
+        if self.stats_interval <= 0:
+            return
+        now = perf_counter()
+        if now - self.last_stats_log < self.stats_interval:
+            return
+        self.last_stats_log = now
+        stats = self.engine.stats
+        runner_stats = getattr(self.engine.model_runner, "stats", None)
+        prefill_batch = stats.prefill_tokens / stats.prefill_steps if stats.prefill_steps else 0.0
+        decode_batch = stats.decode_tokens / stats.decode_steps if stats.decode_steps else 0.0
+        runner_text = ""
+        if runner_stats is not None:
+            runner_text = (
+                f" runner_prepare_prefill_ms={runner_stats.prepare_prefill_ns / 1e6:.2f}"
+                f" runner_prepare_decode_ms={runner_stats.prepare_decode_ns / 1e6:.2f}"
+                f" runner_prepare_sample_ms={runner_stats.prepare_sample_ns / 1e6:.2f}"
+                f" runner_model_prefill_ms={runner_stats.run_model_prefill_ns / 1e6:.2f}"
+                f" runner_model_decode_ms={runner_stats.run_model_decode_ns / 1e6:.2f}"
+                f" runner_sampler_ms={runner_stats.sampler_ns / 1e6:.2f}"
+                f" runner_tolist_ms={runner_stats.tolist_ns / 1e6:.2f}"
+                f" runner_prefill_calls={runner_stats.prefill_calls}"
+                f" runner_decode_calls={runner_stats.decode_calls}"
+                f" runner_decode_graph_calls={runner_stats.decode_graph_calls}"
+                f" runner_decode_eager_calls={runner_stats.decode_eager_calls}"
+            )
+        print(
+            "serving_stats "
+            f"requests={stats.requests} request_messages={stats.request_messages} "
+            f"steps={stats.steps} prefill_steps={stats.prefill_steps} decode_steps={stats.decode_steps} "
+            f"prefill_tokens={stats.prefill_tokens} decode_tokens={stats.decode_tokens} "
+            f"avg_prefill_batch={prefill_batch:.2f} avg_decode_batch={decode_batch:.2f} "
+            f"events={stats.emitted_events} "
+            f"request_normalize_ms={stats.request_normalize_ns / 1e6:.2f} "
+            f"request_add_ms={stats.request_add_ns / 1e6:.2f} "
+            f"schedule_ms={stats.step_schedule_ns / 1e6:.2f} "
+            f"model_ms={stats.step_model_ns / 1e6:.2f} "
+            f"postprocess_ms={stats.step_postprocess_ns / 1e6:.2f} "
+            f"token_handle_ms={stats.token_handle_ns / 1e6:.2f} "
+            f"event_emit_ms={stats.event_emit_ns / 1e6:.2f}"
+            f"{runner_text}",
+            flush=True,
+        )
 
     def stop(self):
         self.shutdown = True
@@ -299,16 +450,29 @@ class ZmqEngineServer:
         self.request_socket.close(linger=0)
 
     def _drain_requests(self):
+        completion_messages = []
         while True:
             try:
                 data = self.request_socket.recv(zmq.NOBLOCK)
             except zmq.Again:
+                if completion_messages:
+                    self.engine.add_completion_requests(completion_messages)
                 return
             message = msgpack.unpackb(data, raw=False)
+            if message.get("type") == "completion":
+                if isinstance(getattr(self.engine, "stats", None), ServingStats):
+                    self.engine.stats.request_messages += 1
+                completion_messages.append(message)
+                continue
+            if completion_messages:
+                self.engine.add_completion_requests(completion_messages)
+                completion_messages = []
             self._handle_message(message)
 
     def _handle_message(self, message: dict[str, Any]):
         message_type = message.get("type")
+        if isinstance(getattr(self.engine, "stats", None), ServingStats):
+            self.engine.stats.request_messages += 1
         if message_type == "completion":
             self.engine.add_completion_request(message)
         elif message_type == "cancel":
@@ -316,9 +480,12 @@ class ZmqEngineServer:
             if isinstance(request_id, str):
                 self.engine.cancel_request(request_id)
         elif message_type == "profile_start":
+            self.engine.reset_stats()
             torch.cuda.cudart().cudaProfilerStart()
         elif message_type == "profile_stop":
             torch.cuda.cudart().cudaProfilerStop()
+        elif message_type == "reset_stats":
+            self.engine.reset_stats()
         elif message_type == "shutdown":
             self.shutdown = True
         else:
@@ -342,6 +509,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-num-batched-tokens", type=int, default=16384)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument("--enforce-eager", action="store_true")
+    parser.add_argument("--stream-token-flush-interval", type=int, default=DEFAULT_STREAM_TOKEN_FLUSH_INTERVAL)
+    parser.add_argument("--log-serving-stats-interval", type=float, default=0.0)
     return parser
 
 
@@ -359,8 +528,15 @@ def main(argv: list[str] | None = None):
         max_num_batched_tokens=args.max_num_batched_tokens,
         gpu_memory_utilization=args.gpu_memory_utilization,
         enforce_eager=args.enforce_eager,
+        enable_runner_stats=args.log_serving_stats_interval > 0,
+        stream_token_flush_interval=args.stream_token_flush_interval,
     )
-    server = ZmqEngineServer(engine, args.request_endpoint, args.event_endpoint)
+    server = ZmqEngineServer(
+        engine,
+        args.request_endpoint,
+        args.event_endpoint,
+        stats_interval=args.log_serving_stats_interval,
+    )
 
     def handle_signal(signum, frame):
         server.stop()

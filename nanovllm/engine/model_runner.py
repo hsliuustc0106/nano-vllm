@@ -1,6 +1,8 @@
 import pickle
 import torch
 import torch.distributed as dist
+from dataclasses import dataclass
+from time import perf_counter
 from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
 
@@ -12,6 +14,21 @@ from nanovllm.utils.context import set_context, get_context, reset_context
 from nanovllm.utils.loader import load_model
 
 
+@dataclass(slots=True)
+class ModelRunnerStats:
+    prepare_prefill_ns: int = 0
+    prepare_decode_ns: int = 0
+    prepare_sample_ns: int = 0
+    run_model_prefill_ns: int = 0
+    run_model_decode_ns: int = 0
+    sampler_ns: int = 0
+    tolist_ns: int = 0
+    prefill_calls: int = 0
+    decode_calls: int = 0
+    decode_graph_calls: int = 0
+    decode_eager_calls: int = 0
+
+
 class ModelRunner:
 
     def __init__(self, config: Config, rank: int, event: Event | list[Event]):
@@ -19,10 +36,12 @@ class ModelRunner:
         hf_config = config.hf_config
         self.block_size = config.kvcache_block_size
         self.enforce_eager = config.enforce_eager
+        self.enable_runner_stats = config.enable_runner_stats
         self.world_size = config.tensor_parallel_size
         self.rank = rank
         self.event = event
         self.graph_includes_logits = self.world_size == 1
+        self.stats = ModelRunnerStats()
 
         dist.init_process_group("nccl", "tcp://localhost:2333", world_size=self.world_size, rank=rank)
         torch.cuda.set_device(rank)
@@ -37,6 +56,8 @@ class ModelRunner:
         self.allocate_kv_cache()
         if not self.enforce_eager:
             self.capture_cudagraph()
+        self.warmup_sampler()
+        self.reset_stats()
         torch.set_default_device("cpu")
         torch.set_default_dtype(default_dtype)
 
@@ -89,6 +110,37 @@ class ModelRunner:
             self.write_shm(method_name, *args)
         method = getattr(self, method_name, None)
         return method(*args)
+
+    def reset_stats(self):
+        self.stats = ModelRunnerStats()
+
+    @staticmethod
+    def build_graph_batch_sizes(max_bs: int) -> list[int]:
+        graph_bs = [bs for bs in [1, 2, 4, 8] if bs <= max_bs]
+        graph_bs.extend(range(16, max_bs + 1, 16))
+        if graph_bs[-1] < max_bs:
+            graph_bs.append(max_bs)
+        return graph_bs
+
+    @staticmethod
+    def build_graph_batch_lookup(graph_bs: list[int], max_bs: int) -> list[int]:
+        graph_bs_for_actual_bs = [0] * (max_bs + 1)
+        graph_index = 0
+        for bs in range(1, max_bs + 1):
+            while graph_bs[graph_index] < bs:
+                graph_index += 1
+            graph_bs_for_actual_bs[bs] = graph_bs[graph_index]
+        return graph_bs_for_actual_bs
+
+    def warmup_sampler(self):
+        if self.rank != 0:
+            return
+        hf_config = self.config.hf_config
+        batch_sizes = getattr(self, "graph_bs", [1, self.config.max_num_seqs])
+        for bs in batch_sizes:
+            logits = torch.zeros(bs, hf_config.vocab_size, dtype=hf_config.dtype)
+            self.sampler(logits, self.default_temperatures[:bs])
+        torch.cuda.synchronize()
 
     def warmup_model(self):
         torch.cuda.empty_cache()
@@ -203,7 +255,7 @@ class ModelRunner:
         else:
             bs = input_ids.size(0)
             context = get_context()
-            graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
+            graph = self.graphs[self.graph_bs_for_actual_bs[bs]]
             graph_vars = self.graph_vars
             graph_vars["input_ids"][:bs] = input_ids
             graph_vars["positions"][:bs] = positions
@@ -218,10 +270,47 @@ class ModelRunner:
             return self.model.compute_logits(graph_vars["outputs"][:bs])
 
     def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
+        if not self.enable_runner_stats:
+            input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
+            temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
+            logits = self.run_model(input_ids, positions, is_prefill)
+            token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
+            reset_context()
+            return token_ids
+
+        prepare_start = perf_counter()
         input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
+        prepare_end = perf_counter()
+        sample_prepare_start = prepare_end
         temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
+        sample_prepare_end = perf_counter()
+        model_start = sample_prepare_end
         logits = self.run_model(input_ids, positions, is_prefill)
-        token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
+        model_end = perf_counter()
+        if self.rank == 0:
+            sampler_start = model_end
+            token_tensor = self.sampler(logits, temperatures)
+            sampler_end = perf_counter()
+            token_ids = token_tensor.tolist()
+            tolist_end = perf_counter()
+        else:
+            sampler_start = sampler_end = tolist_end = model_end
+            token_ids = None
+        if is_prefill:
+            self.stats.prepare_prefill_ns += int((prepare_end - prepare_start) * 1e9)
+            self.stats.run_model_prefill_ns += int((model_end - model_start) * 1e9)
+            self.stats.prefill_calls += 1
+        else:
+            self.stats.prepare_decode_ns += int((prepare_end - prepare_start) * 1e9)
+            self.stats.run_model_decode_ns += int((model_end - model_start) * 1e9)
+            self.stats.decode_calls += 1
+            if self.enforce_eager or input_ids.size(0) > self.graph_bs[-1]:
+                self.stats.decode_eager_calls += 1
+            else:
+                self.stats.decode_graph_calls += 1
+        self.stats.prepare_sample_ns += int((sample_prepare_end - sample_prepare_start) * 1e9)
+        self.stats.sampler_ns += int((sampler_end - sampler_start) * 1e9) if self.rank == 0 else 0
+        self.stats.tolist_ns += int((tolist_end - sampler_end) * 1e9) if self.rank == 0 else 0
         reset_context()
         return token_ids
 
@@ -238,7 +327,7 @@ class ModelRunner:
         block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
         output_size = hf_config.vocab_size if self.graph_includes_logits else hf_config.hidden_size
         outputs = torch.zeros(max_bs, output_size)
-        self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
+        self.graph_bs = self.build_graph_batch_sizes(max_bs)
         self.graphs = {}
         self.graph_pool = None
 
@@ -264,3 +353,4 @@ class ModelRunner:
             block_tables=block_tables,
             outputs=outputs,
         )
+        self.graph_bs_for_actual_bs = self.build_graph_batch_lookup(self.graph_bs, max_bs)

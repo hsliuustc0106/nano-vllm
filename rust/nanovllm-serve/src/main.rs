@@ -37,6 +37,8 @@ struct Args {
     request_endpoint: String,
     #[arg(long, default_value = "tcp://127.0.0.1:5558")]
     event_endpoint: String,
+    #[arg(long)]
+    trace_http: bool,
 }
 
 #[derive(Clone)]
@@ -258,7 +260,7 @@ async fn main() {
         pending,
         _event_receiver: event_receiver,
     };
-    let app = build_router(state);
+    let app = build_router(state, args.trace_http);
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)
         .parse()
         .expect("invalid host or port");
@@ -271,13 +273,17 @@ async fn main() {
         .expect("HTTP server failed");
 }
 
-fn build_router(state: AppState) -> Router {
-    Router::new()
+fn build_router(state: AppState, trace_http: bool) -> Router {
+    let router = Router::new()
         .route("/v1/completions", post(create_completion))
         .route("/v1/models", get(list_models))
         .route("/_debug/profile/{action}", post(profile_control))
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        .with_state(state);
+    if trace_http {
+        router.layer(TraceLayer::new_for_http())
+    } else {
+        router
+    }
 }
 
 fn spawn_request_sender(endpoint: String) -> std_mpsc::Sender<Vec<u8>> {
@@ -563,6 +569,7 @@ async fn profile_control(State(state): State<AppState>, Path(action): Path<Strin
     let message_type = match action.as_str() {
         "start" => "profile_start",
         "stop" => "profile_stop",
+        "reset" => "reset_stats",
         _ => return bad_request(format!("unknown profile action: {action}")).into_response(),
     };
     let request = EngineControlRequest {
@@ -1030,6 +1037,7 @@ mod tests {
     async fn lists_models() {
         let app = fake_app(endpoint(), endpoint());
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
@@ -1054,6 +1062,7 @@ mod tests {
         let _fake_engine = spawn_control_observer(request_endpoint.clone(), control_tx);
         let app = fake_app(request_endpoint, event_endpoint);
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
@@ -1067,6 +1076,22 @@ mod tests {
         assert_eq!(
             control_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
             "profile_start"
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/_debug/profile/reset")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            control_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            "reset_stats"
         );
     }
 
@@ -1120,7 +1145,7 @@ mod tests {
             pending,
             _event_receiver: event_receiver,
         };
-        build_router(state)
+        build_router(state, false)
     }
 
     fn json_request(value: Value) -> Request<Body> {
@@ -1217,9 +1242,11 @@ mod tests {
             let requests = context.socket(zmq::PULL).unwrap();
             requests.bind(&request_endpoint).unwrap();
             requests.set_rcvtimeo(2_000).unwrap();
-            let bytes = requests.recv_bytes(0).unwrap();
-            let request: EngineControlRequest = rmp_serde::from_slice(&bytes).unwrap();
-            let _ = result_tx.send(request.message_type);
+            for _ in 0..2 {
+                let bytes = requests.recv_bytes(0).unwrap();
+                let request: EngineControlRequest = rmp_serde::from_slice(&bytes).unwrap();
+                let _ = result_tx.send(request.message_type);
+            }
         })
     }
 

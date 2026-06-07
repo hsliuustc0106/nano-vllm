@@ -74,8 +74,27 @@ class SchedulerCancelTests(unittest.TestCase):
         self.assertEqual(seq.status, SequenceStatus.FINISHED)
         self.assertEqual(seq.block_table, [])
 
-    def test_schedule_prioritizes_decode_over_waiting_prefill(self):
+    def test_schedule_fills_available_sequence_slots_before_decode(self):
         scheduler = Scheduler(scheduler_config())
+        running = Sequence([1, 2, 3])
+        scheduler.block_manager.allocate(running, 0)
+        running.status = SequenceStatus.RUNNING
+        running.is_prefill = False
+        scheduler.running.append(running)
+        scheduler.last_schedule_was_prefill = True
+        waiting = Sequence([4, 5, 6])
+        scheduler.add(waiting)
+
+        scheduled, is_prefill = scheduler.schedule()
+
+        self.assertTrue(is_prefill)
+        self.assertEqual(scheduled, [waiting])
+        self.assertFalse(scheduler.waiting)
+        self.assertEqual(list(scheduler.running), [running, waiting])
+
+    def test_schedule_decodes_when_running_slots_are_full(self):
+        scheduler = Scheduler(scheduler_config())
+        scheduler.max_num_seqs = 1
         running = Sequence([1, 2, 3])
         scheduler.block_manager.allocate(running, 0)
         running.status = SequenceStatus.RUNNING

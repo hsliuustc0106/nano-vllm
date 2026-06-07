@@ -97,11 +97,37 @@ python tools/compare_serving_bench.py \
 
 The online mode uses the formal `vllm bench serve` harness with
 `--backend openai`, `--endpoint /v1/completions`, and the random dataset. It
-requires the `vllm` CLI to be available on `PATH`.
+uses the `vllm` module from the active Python environment when available, then
+falls back to a `vllm` binary on `PATH`. Pass `--vllm-bin /path/to/vllm` to
+force a specific executable.
 
-Two long-context serving presets are included for repeatable comparisons:
+For serving bottleneck work, pass `--log-serving-stats-interval N` to
+`nanovllm serve` to print lightweight engine counters every `N` seconds,
+including request count, prefill/decode step counts, average prefill batch
+size, average decode batch size, and emitted event count.
+
+Serving presets are included for repeatable comparisons:
 
 ```bash
+# Short throughput run:
+# input 128, output 64, 128 prompts, concurrency 64.
+nanovllm serve \
+  --model ~/huggingface/Qwen3-0.6B/ \
+  --served-model-name Qwen3-0.6B \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --max-model-len 1024 \
+  --max-num-seqs 64 \
+  --max-num-batched-tokens 8192 \
+  --stream-token-flush-interval 16
+
+python tools/compare_serving_bench.py \
+  --preset short-throughput \
+  --mode online \
+  --model ~/huggingface/Qwen3-0.6B/ \
+  --served-model Qwen3-0.6B \
+  --base-url http://127.0.0.1:8000
+
 # Throughput-oriented long-context run:
 # input 8K, output 1K, 16 prompts, concurrency 16.
 nanovllm serve \
@@ -111,7 +137,8 @@ nanovllm serve \
   --port 8000 \
   --max-model-len 32768 \
   --max-num-seqs 16 \
-  --max-num-batched-tokens 32768
+  --max-num-batched-tokens 32768 \
+  --stream-token-flush-interval 16
 
 python tools/compare_serving_bench.py \
   --preset long-throughput-8k-1k \
@@ -129,7 +156,8 @@ nanovllm serve \
   --port 8000 \
   --max-model-len 40960 \
   --max-num-seqs 1 \
-  --max-num-batched-tokens 32768
+  --max-num-batched-tokens 32768 \
+  --stream-token-flush-interval 1
 
 python tools/compare_serving_bench.py \
   --preset low-latency-32k-2k \
@@ -156,6 +184,9 @@ python tools/nsys_online_profile.py \
 
 python tools/analyze_nsys.py /tmp/nanovllm-online.nsys-rep
 ```
+
+Recent local online comparison results are recorded in
+`tools/serving_benchmark_results.md`.
 
 On one NVIDIA L20X with Qwen3-0.6B, 64 concurrent prompts, and 32 generated
 tokens per prompt, local smoke runs showed the online path preserving most of

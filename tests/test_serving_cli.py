@@ -18,6 +18,8 @@ class ServingCliTests(unittest.TestCase):
         self.assertEqual(args.port, 8000)
         self.assertEqual(args.request_endpoint, "tcp://127.0.0.1:5557")
         self.assertEqual(args.event_endpoint, "tcp://127.0.0.1:5558")
+        self.assertEqual(args.stream_token_flush_interval, 16)
+        self.assertEqual(args.log_serving_stats_interval, 0.0)
 
     def test_serve_subcommand_accepts_served_name_and_frontend_binary(self):
         args = build_arg_parser().parse_args([
@@ -31,6 +33,19 @@ class ServingCliTests(unittest.TestCase):
         ])
         self.assertEqual(args.served_model_name, "Qwen3-0.6B")
         self.assertEqual(args.frontend_binary, "/tmp/nanovllm-serve")
+
+    def test_serve_subcommand_accepts_stream_flush_interval(self):
+        args = build_arg_parser().parse_args([
+            "serve",
+            "--model",
+            "/models/qwen",
+            "--stream-token-flush-interval",
+            "1",
+            "--log-serving-stats-interval",
+            "2.5",
+        ])
+        self.assertEqual(args.stream_token_flush_interval, 1)
+        self.assertEqual(args.log_serving_stats_interval, 2.5)
 
     def test_frontend_binary_finds_scripts_dir_sibling(self):
         with tempfile.TemporaryDirectory() as tmpdir:
