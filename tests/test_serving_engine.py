@@ -1,6 +1,10 @@
 import unittest
 from unittest.mock import Mock, patch
 
+import torch
+
+from nanovllm.engine.sequence import Sequence
+from nanovllm.sampling_params import SamplingParams
 from nanovllm.serve.engine import ChoiceState, ServingLLMEngine, ServingStats, ZmqEngineServer
 from nanovllm.serve.text import StreamingTextDecoder
 
@@ -245,6 +249,80 @@ class ServingEngineTests(unittest.TestCase):
         self.assertEqual(engine.stats.decode_steps, 1)
         self.assertEqual(engine.stats.prefill_tokens, 128)
         self.assertEqual(engine.stats.decode_tokens, 64)
+
+    def test_fixed_decode_copies_sampled_tokens_once_at_finish(self):
+        class FakeBlockManager:
+
+            def __init__(self):
+                self.append_calls = 0
+
+            def can_append(self, seq):
+                return True
+
+            def may_append(self, seq):
+                self.append_calls += 1
+
+        class FakeScheduler:
+
+            def __init__(self):
+                self.waiting = []
+                self.block_manager = FakeBlockManager()
+                self.finished = []
+
+            def finish(self, seq, finish_reason):
+                seq.finish_reason = finish_reason
+                self.finished.append((seq.seq_id, finish_reason))
+
+        class FakeRunner:
+
+            world_size = 1
+
+            def __init__(self):
+                self.calls = []
+
+            def call(self, method, seqs, input_ids=None):
+                self.calls.append((method, input_ids.tolist() if input_ids is not None else None))
+                return torch.tensor([65 + len(self.calls)])
+
+        tokenizer = FakeTokenizer()
+        events = []
+        engine = ServingLLMEngine.__new__(ServingLLMEngine)
+        engine.event_sink = events.append
+        engine.tokenizer = tokenizer
+        engine.stats = ServingStats()
+        engine.scheduler = FakeScheduler()
+        engine.model_runner = FakeRunner()
+        engine.choices = {}
+        engine.active_requests = {"req": Mock(remaining=1)}
+        seq = Sequence([80], SamplingParams(max_tokens=3, ignore_eos=True))
+        seq.num_cached_tokens = 1
+        seq.num_scheduled_tokens = 1
+        choice = ChoiceState(
+            seq=seq,
+            request_id="req",
+            choice_index=0,
+            prompt_text="",
+            prompt_tokens=1,
+            stop=[],
+            echo=False,
+            stream=False,
+            decoder=StreamingTextDecoder(tokenizer),
+        )
+        engine.choices[seq.seq_id] = choice
+
+        self.assertTrue(engine._can_batch_decode_token_readback([seq], is_prefill=False))
+        engine._step_fixed_decode([seq], schedule_start=0.0, schedule_end=0.0)
+
+        self.assertEqual([call[0] for call in engine.model_runner.calls], ["run_decode_tokens"] * 3)
+        self.assertEqual([call[1] for call in engine.model_runner.calls], [None, [66], [67]])
+        self.assertEqual(seq.completion_token_ids, [66, 67, 68])
+        self.assertEqual(events[0]["type"], "finished")
+        self.assertEqual(events[0]["text"], "BCD")
+        self.assertEqual(events[0]["token_ids"], [66, 67, 68])
+        self.assertEqual(events[0]["finish_reason"], "length")
+        self.assertEqual(engine.scheduler.finished, [(seq.seq_id, "length")])
+        self.assertEqual(engine.stats.decode_steps, 3)
+        self.assertEqual(engine.stats.decode_tokens, 3)
 
     def test_batch_completion_requests_tokenizes_simple_string_prompts_together(self):
         tokenizer = FakeTokenizer()
