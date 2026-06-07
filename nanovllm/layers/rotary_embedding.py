@@ -2,6 +2,11 @@ from functools import lru_cache
 import torch
 from torch import nn
 
+try:
+    import flashinfer
+except ImportError:  # pragma: no cover - optional kernel acceleration
+    flashinfer = None
+
 
 def apply_rotary_emb(
     x: torch.Tensor,
@@ -34,8 +39,28 @@ class RotaryEmbedding(nn.Module):
         cache = torch.cat((cos, sin), dim=-1).unsqueeze_(1)
         self.register_buffer("cos_sin_cache", cache, persistent=False)
 
-    @torch.compile
     def forward(
+        self,
+        positions: torch.Tensor,
+        query: torch.Tensor,
+        key: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if flashinfer is not None and query.is_cuda:
+            query = query.contiguous()
+            key = key.contiguous()
+            flashinfer.apply_rope_with_cos_sin_cache_inplace(
+                positions,
+                query.flatten(1, -1),
+                key.flatten(1, -1),
+                self.head_size,
+                self.cos_sin_cache[:, 0, :],
+                True,
+            )
+            return query, key
+        return self.forward_torch(positions, query, key)
+
+    @torch.compile
+    def forward_torch(
         self,
         positions: torch.Tensor,
         query: torch.Tensor,
