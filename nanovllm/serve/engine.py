@@ -219,22 +219,27 @@ class ServingLLMEngine(LLMEngine):
             choice = self.choices.get(seq.seq_id)
             if choice is None:
                 return False
-            if choice.stream or choice.stop or choice.echo:
+            if choice.stop or choice.echo:
                 return False
-            if not seq.ignore_eos:
+            if choice.stream and (self.stream_token_flush_interval <= 1 or not choice.emitted_any):
                 return False
             if seq.max_tokens <= seq.num_completion_tokens:
                 return False
         return True
 
+    def _fixed_decode_steps(self, seqs: list[Sequence]) -> int:
+        steps = min(seq.max_tokens - seq.num_completion_tokens for seq in seqs)
+        if any((choice := self.choices.get(seq.seq_id)) is not None and choice.stream for seq in seqs):
+            steps = min(steps, self.stream_token_flush_interval)
+        else:
+            steps = min(steps, FIXED_DECODE_TOKEN_READBACK_INTERVAL)
+        return max(0, steps)
+
     def _step_fixed_decode(self, seqs: list[Sequence], schedule_start: float, schedule_end: float):
         model_start = schedule_end
         next_input_ids = None
         num_token_rows = 0
-        steps = min(
-            FIXED_DECODE_TOKEN_READBACK_INTERVAL,
-            min(seq.max_tokens - seq.num_completion_tokens for seq in seqs),
-        )
+        steps = self._fixed_decode_steps(seqs)
         for step in range(steps):
             if step > 0 and not self._append_decode_slots(seqs):
                 break
@@ -253,24 +258,51 @@ class ServingLLMEngine(LLMEngine):
         model_end = perf_counter()
         if num_token_rows:
             token_rows = self._copy_fixed_decode_tokens_to_cpu(num_token_rows, len(seqs))
-            for seq_index, seq in enumerate(seqs):
-                completion_start = seq.num_tokens - len(token_rows)
-                for offset, token_row in enumerate(token_rows):
-                    seq.token_ids[completion_start + offset] = token_row[seq_index]
-                seq.last_token = seq.token_ids[-1]
             postprocess_start = perf_counter()
-            for seq in list(seqs):
-                if seq.num_completion_tokens >= seq.max_tokens:
-                    self.scheduler.finish(seq, "length")
-                    choice = self.choices.get(seq.seq_id)
-                    if choice is not None:
-                        self._finish_choice(choice, "length")
+            self._postprocess_fixed_decode_tokens(seqs, token_rows)
             postprocess_end = perf_counter()
         else:
             postprocess_start = postprocess_end = model_end
         self.stats.step_schedule_ns += int((schedule_end - schedule_start) * 1e9)
         self.stats.step_model_ns += int((model_end - model_start) * 1e9)
         self.stats.step_postprocess_ns += int((postprocess_end - postprocess_start) * 1e9)
+
+    def _postprocess_fixed_decode_tokens(self, seqs: list[Sequence], token_rows: list[list[int]]):
+        completion_starts: dict[int, int] = {}
+        for seq_index, seq in enumerate(seqs):
+            completion_start = seq.num_tokens - len(token_rows)
+            completion_starts[seq.seq_id] = completion_start
+            for offset, token_row in enumerate(token_rows):
+                seq.token_ids[completion_start + offset] = token_row[seq_index]
+            seq.last_token = seq.token_ids[-1]
+
+        for offset, token_row in enumerate(token_rows):
+            for seq_index, seq in enumerate(seqs):
+                if seq.is_finished:
+                    continue
+                token_id = token_row[seq_index]
+                completion_start = completion_starts[seq.seq_id]
+                completion_tokens = completion_start + offset + 1 - seq.num_prompt_tokens
+                finish_reason = None
+                if not seq.ignore_eos and token_id == self.tokenizer.eos_token_id:
+                    finish_reason = "stop"
+                elif completion_tokens >= seq.max_tokens:
+                    finish_reason = "length"
+
+                if finish_reason is not None:
+                    keep_tokens = completion_start + offset + 1
+                    if keep_tokens < seq.num_tokens:
+                        seq.token_ids = seq.token_ids[:keep_tokens]
+                        seq.num_tokens = keep_tokens
+                        seq.num_cached_tokens = min(seq.num_cached_tokens, seq.num_tokens)
+                        seq.last_token = seq.token_ids[-1]
+                    self.scheduler.finish(seq, finish_reason)
+
+                choice = self.choices.get(seq.seq_id)
+                if choice is not None:
+                    handle_start = perf_counter()
+                    self._handle_token(choice, token_id)
+                    self.stats.token_handle_ns += int((perf_counter() - handle_start) * 1e9)
 
     def _fixed_decode_token_buffer(self, token_tensor: torch.Tensor, steps: int, bs: int):
         max_num_seqs = getattr(self.scheduler, "max_num_seqs", bs)
