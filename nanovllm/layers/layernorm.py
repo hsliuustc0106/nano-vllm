@@ -1,6 +1,11 @@
 import torch
 from torch import nn
 
+try:
+    import flashinfer
+except ImportError:  # pragma: no cover - optional kernel acceleration
+    flashinfer = None
+
 
 class RMSNorm(nn.Module):
 
@@ -44,6 +49,11 @@ class RMSNorm(nn.Module):
         x: torch.Tensor,
         residual: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        if flashinfer is not None and x.is_cuda:
+            if residual is None:
+                return flashinfer.rmsnorm(x, self.weight, self.eps)
+            flashinfer.fused_add_rmsnorm(x, residual, self.weight, self.eps)
+            return x, residual
         if residual is None:
             return self.rms_forward(x)
         else:
