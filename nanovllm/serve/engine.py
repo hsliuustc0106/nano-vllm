@@ -18,6 +18,7 @@ from nanovllm.serve.text import StreamingTextDecoder, find_stop, next_delta, tri
 
 EventSink = Callable[[dict[str, Any]], None]
 DEFAULT_STREAM_TOKEN_FLUSH_INTERVAL = 16
+FIXED_DECODE_TOKEN_READBACK_INTERVAL = 64
 
 
 @dataclass(slots=True)
@@ -83,6 +84,8 @@ class ServingLLMEngine(LLMEngine):
         self.stream_token_flush_interval = stream_token_flush_interval
         self.active_requests: dict[str, ActiveRequest] = {}
         self.choices: dict[int, ChoiceState] = {}
+        self._fixed_decode_token_gpu_buffer = None
+        self._fixed_decode_token_cpu_buffer = None
         self.stats = ServingStats()
 
     def add_completion_request(self, payload: dict[str, Any]):
@@ -187,6 +190,9 @@ class ServingLLMEngine(LLMEngine):
         seqs, is_prefill = self.scheduler.schedule()
         num_tokens = sum(seq.num_scheduled_tokens for seq in seqs) if is_prefill else -len(seqs)
         schedule_end = perf_counter()
+        if self._can_batch_decode_token_readback(seqs, is_prefill):
+            self._step_fixed_decode(seqs, schedule_start, schedule_end)
+            return
         token_ids = self.model_runner.call("run", seqs, is_prefill)
         model_end = perf_counter()
         appended = self.scheduler.postprocess(seqs, token_ids, is_prefill)
@@ -201,6 +207,102 @@ class ServingLLMEngine(LLMEngine):
                 handle_start = perf_counter()
                 self._handle_token(choice, token_id)
                 self.stats.token_handle_ns += int((perf_counter() - handle_start) * 1e9)
+
+    def _can_batch_decode_token_readback(self, seqs: list[Sequence], is_prefill: bool) -> bool:
+        if is_prefill or not seqs:
+            return False
+        if self.scheduler.waiting and len(self.scheduler.running) < self.scheduler.max_num_seqs:
+            return False
+        if getattr(self.model_runner, "world_size", 1) != 1:
+            return False
+        for seq in seqs:
+            choice = self.choices.get(seq.seq_id)
+            if choice is None:
+                return False
+            if choice.stream or choice.stop or choice.echo:
+                return False
+            if not seq.ignore_eos:
+                return False
+            if seq.max_tokens <= seq.num_completion_tokens:
+                return False
+        return True
+
+    def _step_fixed_decode(self, seqs: list[Sequence], schedule_start: float, schedule_end: float):
+        model_start = schedule_end
+        next_input_ids = None
+        num_token_rows = 0
+        steps = min(
+            FIXED_DECODE_TOKEN_READBACK_INTERVAL,
+            min(seq.max_tokens - seq.num_completion_tokens for seq in seqs),
+        )
+        for step in range(steps):
+            if step > 0 and not self._append_decode_slots(seqs):
+                break
+            token_tensor = self.model_runner.call("run_decode_tokens", seqs, next_input_ids)
+            if token_tensor is None:
+                break
+            token_buffer = self._fixed_decode_token_buffer(token_tensor, steps, len(seqs))
+            token_buffer[step, :len(seqs)].copy_(token_tensor)
+            num_token_rows += 1
+            next_input_ids = token_tensor
+            for seq in seqs:
+                seq.num_cached_tokens += seq.num_scheduled_tokens
+                seq.num_scheduled_tokens = 0
+                seq.append_token(-1)
+            self._record_step(-len(seqs))
+        model_end = perf_counter()
+        if num_token_rows:
+            token_rows = self._copy_fixed_decode_tokens_to_cpu(num_token_rows, len(seqs))
+            for seq_index, seq in enumerate(seqs):
+                completion_start = seq.num_tokens - len(token_rows)
+                for offset, token_row in enumerate(token_rows):
+                    seq.token_ids[completion_start + offset] = token_row[seq_index]
+                seq.last_token = seq.token_ids[-1]
+            postprocess_start = perf_counter()
+            for seq in list(seqs):
+                if seq.num_completion_tokens >= seq.max_tokens:
+                    self.scheduler.finish(seq, "length")
+                    choice = self.choices.get(seq.seq_id)
+                    if choice is not None:
+                        self._finish_choice(choice, "length")
+            postprocess_end = perf_counter()
+        else:
+            postprocess_start = postprocess_end = model_end
+        self.stats.step_schedule_ns += int((schedule_end - schedule_start) * 1e9)
+        self.stats.step_model_ns += int((model_end - model_start) * 1e9)
+        self.stats.step_postprocess_ns += int((postprocess_end - postprocess_start) * 1e9)
+
+    def _fixed_decode_token_buffer(self, token_tensor: torch.Tensor, steps: int, bs: int):
+        max_num_seqs = getattr(self.scheduler, "max_num_seqs", bs)
+        shape = (max(steps, FIXED_DECODE_TOKEN_READBACK_INTERVAL), max_num_seqs)
+        if (
+            getattr(self, "_fixed_decode_token_gpu_buffer", None) is None
+            or self._fixed_decode_token_gpu_buffer.shape[0] < shape[0]
+            or self._fixed_decode_token_gpu_buffer.shape[1] < bs
+            or self._fixed_decode_token_gpu_buffer.dtype != token_tensor.dtype
+            or self._fixed_decode_token_gpu_buffer.device != token_tensor.device
+        ):
+            self._fixed_decode_token_gpu_buffer = torch.empty(shape, dtype=token_tensor.dtype, device=token_tensor.device)
+            self._fixed_decode_token_cpu_buffer = torch.empty(shape, dtype=token_tensor.dtype, device="cpu", pin_memory=True)
+        return self._fixed_decode_token_gpu_buffer
+
+    def _copy_fixed_decode_tokens_to_cpu(self, steps: int, bs: int):
+        gpu_tokens = self._fixed_decode_token_gpu_buffer[:steps, :bs]
+        cpu_tokens = self._fixed_decode_token_cpu_buffer[:steps, :bs]
+        cpu_tokens.copy_(gpu_tokens, non_blocking=True)
+        if gpu_tokens.device.type == "cuda":
+            torch.cuda.current_stream(gpu_tokens.device).synchronize()
+        return cpu_tokens.tolist()
+
+    def _append_decode_slots(self, seqs: list[Sequence]) -> bool:
+        for seq in seqs:
+            if not self.scheduler.block_manager.can_append(seq):
+                return False
+        for seq in seqs:
+            seq.num_scheduled_tokens = 1
+            seq.is_prefill = False
+            self.scheduler.block_manager.may_append(seq)
+        return True
 
     def _record_step(self, num_tokens: int):
         self.stats.steps += 1

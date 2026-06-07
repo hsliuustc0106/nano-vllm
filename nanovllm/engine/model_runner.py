@@ -52,6 +52,7 @@ class ModelRunner:
         load_model(self.model, config.model)
         self.sampler = Sampler()
         self.default_temperatures = torch.ones(config.max_num_seqs, dtype=torch.float32)
+        self.allocate_decode_workspaces()
         self.warmup_model()
         self.allocate_kv_cache()
         if not self.enforce_eager:
@@ -114,6 +115,25 @@ class ModelRunner:
     def reset_stats(self):
         self.stats = ModelRunnerStats()
 
+    def allocate_decode_workspaces(self):
+        max_bs = self.config.max_num_seqs
+        max_num_blocks = (self.config.max_model_len + self.block_size - 1) // self.block_size
+        self.decode_input_ids_cpu = torch.empty(max_bs, dtype=torch.int64, device="cpu", pin_memory=True)
+        self.decode_positions_cpu = torch.empty(max_bs, dtype=torch.int64, device="cpu", pin_memory=True)
+        self.decode_slot_mapping_cpu = torch.empty(max_bs, dtype=torch.int32, device="cpu", pin_memory=True)
+        self.decode_context_lens_cpu = torch.empty(max_bs, dtype=torch.int32, device="cpu", pin_memory=True)
+        self.decode_block_tables_cpu = torch.empty((max_bs, max_num_blocks), dtype=torch.int32, device="cpu", pin_memory=True)
+        self.decode_input_ids_cpu_np = self.decode_input_ids_cpu.numpy()
+        self.decode_positions_cpu_np = self.decode_positions_cpu.numpy()
+        self.decode_slot_mapping_cpu_np = self.decode_slot_mapping_cpu.numpy()
+        self.decode_context_lens_cpu_np = self.decode_context_lens_cpu.numpy()
+        self.decode_block_tables_cpu_np = self.decode_block_tables_cpu.numpy()
+        self.decode_input_ids_gpu = torch.empty(max_bs, dtype=torch.int64)
+        self.decode_positions_gpu = torch.empty(max_bs, dtype=torch.int64)
+        self.decode_slot_mapping_gpu = torch.empty(max_bs, dtype=torch.int32)
+        self.decode_context_lens_gpu = torch.empty(max_bs, dtype=torch.int32)
+        self.decode_block_tables_gpu = torch.empty((max_bs, max_num_blocks), dtype=torch.int32)
+
     @staticmethod
     def build_graph_batch_sizes(max_bs: int) -> list[int]:
         graph_bs = [bs for bs in [1, 2, 4, 8] if bs <= max_bs]
@@ -146,12 +166,22 @@ class ModelRunner:
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         max_num_batched_tokens, max_model_len = self.config.max_num_batched_tokens, self.config.max_model_len
+        warmup_shapes = []
         seq_len = min(max_num_batched_tokens, max_model_len)
         num_seqs = min(max_num_batched_tokens // seq_len, self.config.max_num_seqs)
-        seqs = [Sequence([0] * seq_len) for _ in range(num_seqs)]
-        for seq in seqs:
-            seq.num_scheduled_tokens = seq_len
-        self.run(seqs, True)
+        warmup_shapes.append((num_seqs, seq_len))
+        num_seqs = min(max_num_batched_tokens, self.config.max_num_seqs)
+        seq_len = min(max_model_len, max_num_batched_tokens // num_seqs)
+        warmup_shapes.append((num_seqs, seq_len))
+        seen_shapes = set()
+        for num_seqs, seq_len in warmup_shapes:
+            if (num_seqs, seq_len) in seen_shapes:
+                continue
+            seen_shapes.add((num_seqs, seq_len))
+            seqs = [Sequence([0] * seq_len) for _ in range(num_seqs)]
+            for seq in seqs:
+                seq.num_scheduled_tokens = seq_len
+            self.run(seqs, True)
         torch.cuda.empty_cache()
 
     def allocate_kv_cache(self):
@@ -179,6 +209,9 @@ class ModelRunner:
         block_tables = [seq.block_table + [-1] * (max_len - len(seq.block_table)) for seq in seqs]
         block_tables = torch.tensor(block_tables, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         return block_tables
+
+    def _uses_decode_graph(self, bs: int):
+        return not self.enforce_eager and hasattr(self, "graph_bs") and bs <= self.graph_bs[-1]
 
     def prepare_prefill(self, seqs: list[Sequence]):
         input_ids = []
@@ -223,21 +256,57 @@ class ModelRunner:
         set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, None, block_tables)
         return input_ids, positions
 
-    def prepare_decode(self, seqs: list[Sequence]):
-        input_ids = []
-        positions = []
-        slot_mapping = []
-        context_lens = []
-        for seq in seqs:
-            input_ids.append(seq.last_token)
-            positions.append(len(seq) - 1)
-            context_lens.append(len(seq))
-            slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens  - 1)
-        input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        context_lens = torch.tensor(context_lens, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        block_tables = self.prepare_block_tables(seqs)
+    @torch.inference_mode()
+    def prepare_decode(self, seqs: list[Sequence], input_ids: torch.Tensor | None = None):
+        bs = len(seqs)
+        max_len = max(len(seq.block_table) for seq in seqs)
+        if input_ids is None:
+            self.decode_input_ids_cpu_np[:bs] = [seq.last_token for seq in seqs]
+        self.decode_positions_cpu_np[:bs] = [len(seq) - 1 for seq in seqs]
+        self.decode_context_lens_cpu_np[:bs] = [len(seq) for seq in seqs]
+        self.decode_slot_mapping_cpu_np[:bs] = [
+            seq.block_table[-1] * self.block_size + seq.last_block_num_tokens - 1 for seq in seqs
+        ]
+        self.decode_block_tables_cpu_np[:bs, :max_len] = -1
+        for i, seq in enumerate(seqs):
+            block_table = seq.block_table
+            self.decode_block_tables_cpu_np[i, :len(block_table)] = block_table
+
+        if self._uses_decode_graph(bs):
+            graph_bs = self.graph_bs_for_actual_bs[bs]
+            graph_vars = self.graph_vars
+            if input_ids is None:
+                graph_vars["input_ids"][:bs].copy_(self.decode_input_ids_cpu[:bs], non_blocking=True)
+            else:
+                graph_vars["input_ids"][:bs].copy_(input_ids.to(dtype=torch.int64), non_blocking=True)
+            graph_vars["positions"][:bs].copy_(self.decode_positions_cpu[:bs], non_blocking=True)
+            graph_vars["slot_mapping"][:graph_bs].fill_(-1)
+            graph_vars["slot_mapping"][:bs].copy_(self.decode_slot_mapping_cpu[:bs], non_blocking=True)
+            graph_vars["context_lens"][:graph_bs].zero_()
+            graph_vars["context_lens"][:bs].copy_(self.decode_context_lens_cpu[:bs], non_blocking=True)
+            graph_vars["block_tables"][:bs, :max_len].copy_(self.decode_block_tables_cpu[:bs, :max_len], non_blocking=True)
+            set_context(
+                False,
+                slot_mapping=graph_vars["slot_mapping"][:bs],
+                context_lens=graph_vars["context_lens"][:bs],
+                block_tables=graph_vars["block_tables"][:bs, :max_len],
+                graph_resident=True,
+            )
+            return graph_vars["input_ids"][:bs], graph_vars["positions"][:bs]
+
+        if input_ids is None:
+            self.decode_input_ids_gpu[:bs].copy_(self.decode_input_ids_cpu[:bs], non_blocking=True)
+            input_ids = self.decode_input_ids_gpu[:bs]
+        else:
+            input_ids = input_ids.to(device="cuda", dtype=torch.int64, non_blocking=True)
+        self.decode_positions_gpu[:bs].copy_(self.decode_positions_cpu[:bs], non_blocking=True)
+        self.decode_slot_mapping_gpu[:bs].copy_(self.decode_slot_mapping_cpu[:bs], non_blocking=True)
+        self.decode_context_lens_gpu[:bs].copy_(self.decode_context_lens_cpu[:bs], non_blocking=True)
+        self.decode_block_tables_gpu[:bs, :max_len].copy_(self.decode_block_tables_cpu[:bs, :max_len], non_blocking=True)
+        positions = self.decode_positions_gpu[:bs]
+        slot_mapping = self.decode_slot_mapping_gpu[:bs]
+        context_lens = self.decode_context_lens_gpu[:bs]
+        block_tables = self.decode_block_tables_gpu[:bs, :max_len]
         set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
         return input_ids, positions
 
@@ -257,13 +326,14 @@ class ModelRunner:
             context = get_context()
             graph = self.graphs[self.graph_bs_for_actual_bs[bs]]
             graph_vars = self.graph_vars
-            graph_vars["input_ids"][:bs] = input_ids
-            graph_vars["positions"][:bs] = positions
-            graph_vars["slot_mapping"].fill_(-1)
-            graph_vars["slot_mapping"][:bs] = context.slot_mapping
-            graph_vars["context_lens"].zero_()
-            graph_vars["context_lens"][:bs] = context.context_lens
-            graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
+            if not context.graph_resident:
+                graph_vars["input_ids"][:bs] = input_ids
+                graph_vars["positions"][:bs] = positions
+                graph_vars["slot_mapping"].fill_(-1)
+                graph_vars["slot_mapping"][:bs] = context.slot_mapping
+                graph_vars["context_lens"].zero_()
+                graph_vars["context_lens"][:bs] = context.context_lens
+                graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
             graph.replay()
             if self.graph_includes_logits:
                 return graph_vars["outputs"][:bs]
@@ -311,6 +381,43 @@ class ModelRunner:
         self.stats.prepare_sample_ns += int((sample_prepare_end - sample_prepare_start) * 1e9)
         self.stats.sampler_ns += int((sampler_end - sampler_start) * 1e9) if self.rank == 0 else 0
         self.stats.tolist_ns += int((tolist_end - sampler_end) * 1e9) if self.rank == 0 else 0
+        reset_context()
+        return token_ids
+
+    def run_decode_tokens(self, seqs: list[Sequence], input_ids: torch.Tensor | None = None) -> torch.Tensor | None:
+        if not self.enable_runner_stats:
+            input_ids, positions = self.prepare_decode(seqs, input_ids)
+            temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
+            logits = self.run_model(input_ids, positions, False)
+            token_ids = self.sampler(logits, temperatures) if self.rank == 0 else None
+            reset_context()
+            return token_ids
+
+        prepare_start = perf_counter()
+        input_ids, positions = self.prepare_decode(seqs, input_ids)
+        prepare_end = perf_counter()
+        sample_prepare_start = prepare_end
+        temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
+        sample_prepare_end = perf_counter()
+        model_start = sample_prepare_end
+        logits = self.run_model(input_ids, positions, False)
+        model_end = perf_counter()
+        if self.rank == 0:
+            sampler_start = model_end
+            token_ids = self.sampler(logits, temperatures)
+            sampler_end = perf_counter()
+        else:
+            sampler_start = sampler_end = model_end
+            token_ids = None
+        self.stats.prepare_decode_ns += int((prepare_end - prepare_start) * 1e9)
+        self.stats.run_model_decode_ns += int((model_end - model_start) * 1e9)
+        self.stats.prepare_sample_ns += int((sample_prepare_end - sample_prepare_start) * 1e9)
+        self.stats.sampler_ns += int((sampler_end - sampler_start) * 1e9) if self.rank == 0 else 0
+        self.stats.decode_calls += 1
+        if self.enforce_eager or input_ids.size(0) > self.graph_bs[-1]:
+            self.stats.decode_eager_calls += 1
+        else:
+            self.stats.decode_graph_calls += 1
         reset_context()
         return token_ids
 
