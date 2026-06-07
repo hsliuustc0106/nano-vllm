@@ -10,7 +10,7 @@ Environment:
 - Benchmark harness: `vllm bench serve --backend openai --endpoint /v1/completions --dataset-name random`
 - Nano-vLLM frontend: rebuilt `rust/nanovllm-serve/target/debug/nanovllm-serve`
 
-## Latest Online Serving Comparison (formal `vllm bench serve`, all runs: 0 failures)
+## Latest Online Serving Comparison (formal `vllm bench serve`, cold first burst, all runs: 0 failures)
 
 | Preset | Server | Successful | Duration (s) | Output tok/s | Mean TTFT ms | Mean TPOT ms | Mean ITL ms |
 |:--|:--|--:|--:|--:|--:|--:|--:|
@@ -21,9 +21,42 @@ Environment:
 | low-latency-32k-2k, input 32768, output 2048, prompts 4, concurrency 1 | Nano-vLLM | 4 | 29.66 | 276.21 | 803.21 | 3.23 | 3.23 |
 | low-latency-32k-2k, input 32768, output 2048, prompts 4, concurrency 1 | vLLM 0.22.1 | 4 | 25.22 | 324.81 | 442.66 | 2.86 | 2.87 |
 
-The previous refreshed table that reported Nano-vLLM short-throughput around
-14.12k tok/s was not reproduced by a fresh formal `vllm bench serve` rerun. The
-current table above uses the direct harness output from the verified rerun.
+These rows use the first measured benchmark burst after the server is ready,
+with no explicit `vllm bench serve --num-warmups` requests.
+
+## Short-Throughput Warmup/Profile Follow-up
+
+Short online serving is sensitive to first-burst warmup effects. A small
+serving warmup before the measured short-throughput run reproduced the
+previously surprising high Nano-vLLM result:
+
+| Run | Server | Successful | Duration (s) | Output tok/s | Mean TTFT ms | Mean TPOT ms | Mean ITL ms |
+|:--|:--|--:|--:|--:|--:|--:|--:|
+| normal warmed rerun | Nano-vLLM | 128 | 0.59 | 13791.14 | 108.83 | 2.84 | 35.74 |
+| Nsight Systems profiled warmed run | Nano-vLLM | 128 | 0.63 | 13018.16 | 111.96 | 3.13 | 39.46 |
+| Nsight Systems profiled warmed run | vLLM 0.22.1 | 128 | 0.76 | 10832.31 | 137.51 | 3.72 | 3.79 |
+
+The earlier refreshed table that reported Nano-vLLM short-throughput around
+14k tok/s was therefore a warmed steady-state style result, while the cold
+first-burst table above measures startup-adjacent serving behavior. Future
+comparisons should report both baselines instead of mixing them.
+
+VeloQ analysis of the warmed Nsight traces (`/tmp/nano_short_profile.nsys-rep`
+and `/tmp/vllm_short_profile.nsys-rep`) showed:
+
+| Metric | Nano-vLLM | vLLM 0.22.1 | Interpretation |
+|:--|--:|--:|:--|
+| Trace span | 600.0 ms | 719.4 ms | measured window |
+| GPU kernel time | 59.7 ms | 121.5 ms | Nano is not slower on device kernels in the warmed short run |
+| CUDA runtime/API time | 268.4 ms | 125.0 ms | Nano has more host-side CUDA overhead |
+| Top 20 GPU idle gap total | 112.0 ms | 61.5 ms | Nano has larger host-side bubbles |
+| CUDA graph replays | 126 | 190 | both paths use CUDA graphs |
+| Device memcpy time | 1.33 ms | 1.53 ms | copies are not bandwidth-bound |
+
+Nano's largest runtime bucket was `cudaMemcpyAsync` host/API time
+(208.6 ms), while actual device memcpy work was only 1.33 ms. That points to
+host-side queueing/synchronization around small transfers rather than device
+copy bandwidth as the next short-path optimization target.
 
 ## Historical Online Serving Results
 

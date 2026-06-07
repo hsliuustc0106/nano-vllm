@@ -101,6 +101,14 @@ uses the `vllm` module from the active Python environment when available, then
 falls back to a `vllm` binary on `PATH`. Pass `--vllm-bin /path/to/vllm` to
 force a specific executable.
 
+Short online runs are sensitive to first-burst warmup effects. Use the default
+`--num-warmups 0` to measure cold first-burst behavior, or pass
+`--num-warmups N` to ask `vllm bench serve` to issue warmup requests before the
+measured run. When comparing against upstream vLLM, launch vLLM with
+`--generation-config vllm` or pass explicit sampling flags such as `--top-p`
+and `--top-k` through this script so model `generation_config.json` defaults do
+not silently change the sampling path.
+
 For serving bottleneck work, pass `--log-serving-stats-interval N` to
 `nanovllm serve` to print lightweight engine counters every `N` seconds,
 including request count, prefill/decode step counts, average prefill batch
@@ -127,6 +135,15 @@ python tools/compare_serving_bench.py \
   --model ~/huggingface/Qwen3-0.6B/ \
   --served-model Qwen3-0.6B \
   --base-url http://127.0.0.1:8000
+
+# Warmed steady-state variant:
+python tools/compare_serving_bench.py \
+  --preset short-throughput \
+  --mode online \
+  --model ~/huggingface/Qwen3-0.6B/ \
+  --served-model Qwen3-0.6B \
+  --base-url http://127.0.0.1:8000 \
+  --num-warmups 16
 
 # Throughput-oriented long-context run:
 # input 8K, output 1K, 16 prompts, concurrency 16.
